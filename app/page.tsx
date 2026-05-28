@@ -1,65 +1,133 @@
-import Image from "next/image";
+"use client";
+import Link from "next/link";
+import { useEffect, useRef } from "react";
+import { gsap } from "gsap";
+import { Shield, User, Radio, ArrowRight, PlusSquare } from "lucide-react";
 
-export default function Home() {
+export default function GatewayPage() {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        "[data-animate]",
+        { opacity: 0, y: 32 },
+        { opacity: 1, y: 0, duration: 0.6, stagger: 0.12, ease: "power2.out" }
+      );
+    }, containerRef);
+    return () => ctx.revert();
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div ref={containerRef} className="min-h-screen bg-[#0c0f16] text-white flex flex-col">
+      {/* Header */}
+      <header className="w-full max-w-7xl mx-auto px-6 py-8 flex justify-between items-center" data-animate>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-[#8b1a1a] rounded-lg flex items-center justify-center shadow-lg">
+            <PlusSquare className="h-5 w-5 text-white" />
+          </div>
+          <span className="text-xl font-bold tracking-tight">RespondaCare</span>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex items-center gap-2 text-xs font-semibold tracking-widest text-[#8b949e] uppercase">
+          <Shield className="h-4 w-4" />
+          <span>Secure Portal</span>
         </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-grow flex flex-col items-center justify-center px-6 py-12">
+        <h1
+          data-animate
+          className="text-5xl md:text-6xl font-extrabold text-center mb-4 tracking-tight"
+        >
+          Welcome to RespondaCare
+        </h1>
+        <p data-animate className="text-[#8b949e] text-center mb-16 max-w-lg">
+          Connecting barangay communities with fast, coordinated emergency response.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-5xl">
+          {/* Resident Card */}
+          <article data-animate className="group hover-lift bg-[#161b22] rounded-2xl overflow-hidden border border-gray-800 flex flex-col shadow-2xl">
+            <div
+              className="h-64 flex items-center justify-center"
+              style={{ background: "linear-gradient(180deg, rgba(61,36,42,1) 0%, rgba(30,20,25,1) 100%)" }}
+            >
+              <User className="h-24 w-24 text-white opacity-80 group-hover:scale-110 transition-transform duration-300" />
+            </div>
+            <div className="p-8 flex flex-col flex-grow">
+              <div className="mb-4">
+                <span className="inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider text-[#f87171]"
+                  style={{ background: "rgba(139,26,26,0.2)" }}>
+                  Residents
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold mb-4">Resident Portal</h2>
+              <p className="text-[#8b949e] leading-relaxed mb-10 flex-grow">
+                Access your electronic health records, update emergency contacts, and manage your medical ID for first responders.
+              </p>
+              <Link
+                href="/login"
+                className="w-full bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors duration-200"
+              >
+                <span>Login as Patient</span>
+                <ArrowRight className="h-5 w-5" />
+              </Link>
+            </div>
+          </article>
+
+          {/* Responder Card */}
+          <article data-animate className="group hover-lift bg-[#161b22] rounded-2xl overflow-hidden border border-gray-800 flex flex-col shadow-2xl">
+            <div
+              className="h-64 flex items-center justify-center"
+              style={{ background: "linear-gradient(180deg, rgba(61,36,42,1) 0%, rgba(30,20,25,1) 100%)" }}
+            >
+              <Radio className="h-24 w-24 text-white opacity-80 group-hover:scale-110 transition-transform duration-300" />
+            </div>
+            <div className="p-8 flex flex-col flex-grow">
+              <div className="mb-4">
+                <span className="inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider text-[#f87171]"
+                  style={{ background: "rgba(139,26,26,0.2)" }}>
+                  Emergency Services
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold mb-4">Responder Portal</h2>
+              <p className="text-[#8b949e] leading-relaxed mb-10 flex-grow">
+                Monitor real-time emergency alerts, view critical patient data in the field, and coordinate response efforts with dispatch.
+              </p>
+              <Link
+                href="/login"
+                className="w-full bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors duration-200"
+              >
+                <span>Login as First Responder</span>
+                <ArrowRight className="h-5 w-5" />
+              </Link>
+            </div>
+          </article>
+        </div>
+
+        {/* Admin Link */}
+        <p data-animate className="mt-10 text-sm text-[#8b949e]">
+          System Administrator?{" "}
+          <Link href="/login" className="text-[#8b1a1a] hover:underline font-semibold">
+            Access Command Center
+          </Link>
+        </p>
       </main>
+
+      {/* Footer */}
+      <footer className="w-full py-10 flex flex-col items-center space-y-6" data-animate>
+        <nav className="flex items-center gap-6 text-sm text-[#8b949e]">
+          <Link href="#" className="hover:text-white transition-colors">Privacy Policy</Link>
+          <span className="w-1 h-1 bg-gray-700 rounded-full" />
+          <Link href="#" className="hover:text-white transition-colors">Terms of Service</Link>
+          <span className="w-1 h-1 bg-gray-700 rounded-full" />
+          <Link href="#" className="hover:text-white transition-colors">Help Center</Link>
+        </nav>
+        <p className="text-[11px] text-gray-600 font-medium tracking-wide uppercase">
+          © 2024 RespondaCare. Supporting local Barangay emergency networks.
+        </p>
+      </footer>
     </div>
   );
 }

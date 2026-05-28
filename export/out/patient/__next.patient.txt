@@ -1,0 +1,5 @@
+1:"$Sreact.fragment"
+2:I[86738,["/_next/static/chunks/01xlw8hd842-c.js","/_next/static/chunks/0n4z.7yu76je-.js","/_next/static/chunks/06ggj-1~9tq7k.js","/_next/static/chunks/041ofngpu-c--.js"],"PatientSidebar"]
+3:I[39756,["/_next/static/chunks/01xlw8hd842-c.js","/_next/static/chunks/0n4z.7yu76je-.js"],"default"]
+4:I[37457,["/_next/static/chunks/01xlw8hd842-c.js","/_next/static/chunks/0n4z.7yu76je-.js"],"default"]
+0:{"rsc":["$","$1","c",{"children":[[["$","script","script-0",{"src":"/_next/static/chunks/06ggj-1~9tq7k.js","async":true}],["$","script","script-1",{"src":"/_next/static/chunks/041ofngpu-c--.js","async":true}]],["$","div",null,{"className":"flex h-screen overflow-hidden bg-[#0f1115]","children":[["$","$L2",null,{}],["$","main",null,{"className":"flex-grow overflow-y-auto","children":["$","$L3",null,{"parallelRouterKey":"children","template":["$","$L4",null,{}]}]}]]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"3PXUhl5o5CvnTwN3Tcvc9"}
