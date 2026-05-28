@@ -1,11 +1,33 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { gsap } from "gsap";
 import { Shield, User, Radio, ArrowRight, PlusSquare } from "lucide-react";
 
 export default function GatewayPage() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const session = localStorage.getItem("respondaCare_session");
+      if (session) {
+        try {
+          const parsed = JSON.parse(session);
+          if (parsed?.role === "admin") {
+            router.push("/admin/dashboard");
+          } else if (parsed?.role === "responder") {
+            router.push("/responder/dispatch");
+          } else if (parsed?.role === "patient") {
+            router.push("/patient/dashboard");
+          }
+        } catch (e) {
+          console.warn("Invalid session", e);
+        }
+      }
+    }
+  }, [router]);
 
   useEffect(() => {
     const ctx = gsap.context(() => {

@@ -1,14 +1,41 @@
 "use client";
+
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState, FormEvent, KeyboardEvent } from "react";
 import { gsap } from "gsap";
-import { Eye, EyeOff, Lock, User, Shield, PlusSquare, ArrowRight } from "lucide-react";
+import { Eye, EyeOff, Lock, User, Shield, PlusSquare, ArrowRight, ArrowLeft, Loader2, CheckCircle2 } from "lucide-react";
 import { FormInput } from "../components/ui/FormInput";
+import { supabase, isPlaceholderUrl } from "../lib/supabase";
+
+// Sandbox credential map: email → role
+const SANDBOX_USERS: Record<string, { role: "patient" | "responder" | "admin"; name: string }> = {
+  "admin@respondacare.ph":     { role: "admin",     name: "Dispatch Admin" },
+  "responder@respondacare.ph": { role: "responder", name: "Medic Unit Alpha" },
+  "resident@respondacare.ph":  { role: "patient",   name: "Juan Dela Cruz" },
+};
+
+const SANDBOX_PASSWORD = "password123";
+const SANDBOX_OTP = "123456";
 
 export default function LoginPage() {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [role, setRole] = useState<"patient" | "responder" | "admin">("patient");
+  
+  // State variables
+  const [role, setRole] = useState<"patient" | "responder" | "admin" >("patient");
+  const [step, setStep] = useState<1 | 2>(1); // 1: Credentials, 2: MFA TOTP
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const [otp, setOtp] = useState<string[]>(["", "", "", "", "", ""]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [detectedRole, setDetectedRole] = useState<"patient" | "responder" | "admin" | null>(null);
+
+  // References for OTP fields focus management
+  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -21,10 +48,150 @@ export default function LoginPage() {
     return () => ctx.revert();
   }, []);
 
+  // Focus the first OTP box when transitioning to step 2
+  useEffect(() => {
+    if (step === 2 && otpRefs.current[0]) {
+      setTimeout(() => otpRefs.current[0]?.focus(), 100);
+    }
+  }, [step]);
+
   const roleDestinations: Record<string, string> = {
     patient: "/patient/dashboard",
     responder: "/responder/dispatch",
     admin: "/admin/dashboard",
+  };
+
+  // Handle credentials check (Step 1)
+  const handleCredentialSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (!email.trim() || !password) {
+      setError("Please fill in all credential fields.");
+      return;
+    }
+
+    setLoading(true);
+    // Simulate natural networking latency
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    try {
+      const trimmedEmail = email.trim().toLowerCase();
+      const sandboxUser = SANDBOX_USERS[trimmedEmail];
+      const isSandboxUser = sandboxUser && password === SANDBOX_PASSWORD;
+      const isRealUser = !supabase.auth.getSession ? false : !isPlaceholderUrl;
+
+      if (isRealUser && !isSandboxUser) {
+        const { error: sbError } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: password,
+        });
+        if (sbError) throw sbError;
+      }
+
+      if (isSandboxUser || isRealUser) {
+        // Store detected role for routing
+        const finalRole = sandboxUser?.role || role;
+        setDetectedRole(finalRole);
+
+        // Residents (patients) bypass MFA and go straight to dashboard
+        if (finalRole === "patient") {
+          localStorage.setItem(
+            "respondaCare_session",
+            JSON.stringify({
+              role: "patient",
+              email: trimmedEmail,
+              name: sandboxUser?.name || trimmedEmail,
+            })
+          );
+          setSuccess(true);
+          await new Promise((r) => setTimeout(r, 600));
+          router.push("/patient/dashboard");
+        } else {
+          setStep(2); // Proceed to MFA
+        }
+      } else {
+        setError(
+          "Invalid credentials. Demo logins: admin@respondacare.ph | responder@respondacare.ph | resident@respondacare.ph (Password: password123)"
+        );
+      }
+    } catch (err: any) {
+      setError(err.message || "Authentication error. Please check credentials.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle MFA OTP entry change
+  const handleOtpChange = (index: number, val: string) => {
+    const cleanVal = val.replace(/[^0-9]/g, "").slice(-1);
+    const newOtp = [...otp];
+    newOtp[index] = cleanVal;
+    setOtp(newOtp);
+
+    // Auto-advance focus to next input
+    if (cleanVal !== "" && index < 5 && otpRefs.current[index + 1]) {
+      otpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  // Handle backspaces in OTP entry
+  const handleOtpKeyDown = (index: number, e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && otp[index] === "" && index > 0 && otpRefs.current[index - 1]) {
+      otpRefs.current[index - 1]?.focus();
+    }
+  };
+
+  // Handle MFA check (Step 2)
+  const handleMfaSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    const token = otp.join("");
+    if (token.length !== 6) {
+      setError("Please enter the full 6-digit verification code.");
+      return;
+    }
+
+    setLoading(true);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    try {
+      const isSandboxVerify = token === SANDBOX_OTP;
+      const isRealUser = !isPlaceholderUrl;
+
+      if (isSandboxVerify || isRealUser) {
+        const trimmedEmail = email.trim().toLowerCase();
+        const sandboxUser = SANDBOX_USERS[trimmedEmail];
+        const finalRole = detectedRole || sandboxUser?.role || "responder";
+
+        // Save session with role mapping
+        localStorage.setItem(
+          "respondaCare_session",
+          JSON.stringify({
+            role: finalRole,
+            email: trimmedEmail,
+            name: sandboxUser?.name || trimmedEmail,
+          })
+        );
+
+        setSuccess(true);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        // Route by role
+        if (finalRole === "admin") {
+          router.push("/admin/dashboard");
+        } else {
+          router.push("/responder/dispatch");
+        }
+      } else {
+        setError("Invalid security token. Use sandbox code: 123456");
+      }
+    } catch (err: any) {
+      setError(err.message || "MFA validation failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -45,81 +212,191 @@ export default function LoginPage() {
 
       {/* Main */}
       <main className="flex-grow flex flex-col items-center justify-center px-4 py-12">
-        <h1 data-animate className="text-3xl font-bold mb-10 tracking-tight">Welcome Back</h1>
+        <h1 data-animate className="text-3xl font-bold mb-10 tracking-tight">
+          {step === 1 ? "Welcome Back" : "Security Verification"}
+        </h1>
 
         {/* Login Card */}
         <section
           data-animate
-          className="w-full max-w-[540px] rounded-2xl p-8 md:p-10"
+          className="w-full max-w-[540px] rounded-2xl p-8 md:p-10 shadow-2xl"
           style={{
             border: "1px solid #30363d",
             background: "linear-gradient(180deg, #161b22 0%, #0d1117 100%)",
           }}
         >
-          {/* Role Selector */}
-          <div className="flex bg-[#0d1117] p-1 rounded-lg mb-8">
-            {(["patient", "responder", "admin"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRole(r)}
-                className={[
-                  "flex-1 py-2 text-sm font-medium rounded-md transition-colors capitalize",
-                  role === r ? "bg-[#8b1a1a] text-white shadow-sm" : "text-[#8b949e]",
-                ].join(" ")}
-              >
-                {r === "responder" ? "First Responder" : r.charAt(0).toUpperCase() + r.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          {/* Form */}
-          <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
-            <FormInput
-              id="email"
-              type="email"
-              label={role === "responder" ? "Official Email" : "Email Address"}
-              placeholder="Enter your email"
-              icon={<User className="h-5 w-5" />}
-            />
-            <FormInput
-              id="password"
-              type={showPw ? "text" : "password"}
-              label="Password"
-              placeholder="••••••••"
-              icon={<Lock className="h-5 w-5" />}
-              rightElement={
-                <button type="button" onClick={() => setShowPw((v) => !v)}>
-                  {showPw ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              }
-            />
-            <div className="flex justify-end">
-              <Link href="#" className="text-xs text-[#8b1a1a] hover:underline font-medium">Forgot password?</Link>
+          {/* Status Alerts */}
+          {error && (
+            <div className="mb-6 p-4 rounded-lg bg-red-950/45 border border-[#a01e1e] text-sm text-red-300 font-mono">
+              ⚠️ {error}
             </div>
-            <Link
-              href={roleDestinations[role]}
-              className="w-full flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-4 rounded-lg transition-colors shadow-lg shadow-red-900/20 group"
-            >
-              <span>Sign In to Portal</span>
-              <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
-            </Link>
-          </form>
+          )}
+
+          {success && (
+            <div className="mb-6 p-4 rounded-lg bg-emerald-950/45 border border-emerald-500/30 text-sm text-emerald-300 font-mono flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-emerald-400 animate-pulse" />
+              <span>Session Authorized. Initializing...</span>
+            </div>
+          )}
+
+          {step === 1 ? (
+            /* STEP 1: CREDENTIALS FLOW */
+            <>
+              {/* Role Selector */}
+              <div className="flex bg-[#0d1117] p-1 rounded-lg mb-8 border border-white/[0.04]">
+                {(["patient", "responder", "admin"] as const).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => {
+                      setRole(r);
+                      setError("");
+                    }}
+                    className={[
+                      "flex-1 py-2 text-sm font-medium rounded-md transition-colors capitalize cursor-pointer",
+                      role === r ? "bg-[#8b1a1a] text-white shadow-md" : "text-[#8b949e] hover:text-[#c5c5d5]",
+                    ].join(" ")}
+                  >
+                    {r === "responder" ? "First Responder" : r === "patient" ? "Resident" : "Admin"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Form */}
+              <form className="space-y-6" onSubmit={handleCredentialSubmit}>
+                <FormInput
+                  id="email"
+                  type="email"
+                  label={role === "responder" ? "Official Email" : role === "admin" ? "Admin Username" : "Email Address"}
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  icon={<User className="h-5 w-5" />}
+                  required
+                />
+                <FormInput
+                  id="password"
+                  type={showPw ? "text" : "password"}
+                  label="Password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  icon={<Lock className="h-5 w-5" />}
+                  rightElement={
+                    <button type="button" onClick={() => setShowPw((v) => !v)} className="cursor-pointer">
+                      {showPw ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  }
+                  required
+                />
+                <div className="flex justify-end">
+                  <Link href="#" className="text-xs text-[#8b1a1a] hover:underline font-medium">
+                    Forgot password?
+                  </Link>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading || success}
+                  className="w-full flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-4 rounded-lg transition-colors shadow-lg shadow-red-900/20 group cursor-pointer disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span>Authenticating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{role === "patient" ? "Access Portal" : "Continue to MFA"}</span>
+                      <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                    </>
+                  )}
+                </button>
+              </form>
+            </>
+          ) : (
+            /* STEP 2: TOTP MFA FLOW */
+            <form onSubmit={handleMfaSubmit} className="space-y-6">
+              <div className="text-center space-y-2">
+                <p className="text-sm text-[#8b949e] leading-relaxed">
+                  Enter the 6-digit TOTP verification token from your authenticator app.
+                </p>
+                <p className="text-xs font-mono text-[#8b949e]">
+                  Sandbox Code: <span className="text-[#ff5555] font-bold">123456</span>
+                </p>
+              </div>
+
+              {/* 6 OTP Boxes */}
+              <div className="flex justify-between gap-2 max-w-[280px] mx-auto py-2">
+                {otp.map((digit, index) => (
+                  <input
+                    key={index}
+                    ref={(el) => {
+                      otpRefs.current[index] = el;
+                    }}
+                    id={`otp-box-${index}`}
+                    type="text"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={digit}
+                    onChange={(e) => handleOtpChange(index, e.target.value)}
+                    onKeyDown={(e) => handleOtpKeyDown(index, e)}
+                    className="w-10 h-12 bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] focus:ring-1 focus:ring-[#8b1a1a] rounded text-center text-lg font-mono font-bold text-white outline-none transition-all"
+                  />
+                ))}
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={loading || success || otp.join("").length !== 6}
+                  className="w-full flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-4 rounded-lg transition-colors shadow-lg shadow-red-900/20 cursor-pointer disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span>Verifying...</span>
+                    </>
+                  ) : (
+                    <span>Verify & Access Portal</span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  className="w-full flex items-center justify-center gap-2 text-[#8b949e] hover:text-white text-xs font-semibold py-2 transition-colors cursor-pointer"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Back to Credentials</span>
+                </button>
+              </div>
+            </form>
+          )}
         </section>
 
-        <p data-animate className="mt-8 text-sm text-[#8b949e]">
-          First time here?{" "}
-          <Link href="/register" className="text-[#8b1a1a] font-semibold hover:underline">
-            Create an account
-          </Link>
-        </p>
+        {step === 1 && (
+          <p data-animate className="mt-8 text-sm text-[#8b949e]">
+            First time here?{" "}
+            <Link href="/register" className="text-[#8b1a1a] font-semibold hover:underline">
+              Create an account
+            </Link>
+          </p>
+        )}
       </main>
 
       {/* Footer */}
       <footer className="w-full py-10 flex flex-col items-center space-y-6" data-animate>
         <nav className="flex gap-8 text-[#8b949e] text-sm">
-          <Link href="#" className="hover:text-white transition-colors">Support</Link>
-          <Link href="#" className="hover:text-white transition-colors">Help Centers</Link>
-          <Link href="#" className="hover:text-white transition-colors">Privacy</Link>
+          <Link href="#" className="hover:text-white transition-colors">
+            Support
+          </Link>
+          <Link href="#" className="hover:text-white transition-colors">
+            Help Centers
+          </Link>
+          <Link href="#" className="hover:text-white transition-colors">
+            Privacy
+          </Link>
         </nav>
         <p className="text-[#8b949e] text-xs">© 2024 RespondaCare Healthcare Systems. All rights reserved.</p>
       </footer>

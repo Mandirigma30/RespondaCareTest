@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Radio, History, QrCode, FileText, LogOut, PlusSquare } from "lucide-react";
 import { useSidebarAnimation } from "../animations/usePageAnimation";
 
@@ -13,7 +13,14 @@ const navItems = [
 
 export function ResponderSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const sidebarRef = useSidebarAnimation();
+
+  const handleLogout = (e: React.MouseEvent) => {
+    e.preventDefault();
+    localStorage.removeItem("respondaCare_session");
+    router.push("/");
+  };
 
   return (
     <aside
@@ -56,13 +63,13 @@ export function ResponderSidebar() {
 
       {/* Logout */}
       <div className="p-4 border-t border-gray-800" data-sidebar-item>
-        <Link
-          href="/"
-          className="flex items-center w-full px-4 py-3 text-gray-400 hover:text-white transition-colors text-sm"
+        <button
+          onClick={handleLogout}
+          className="flex items-center w-full px-4 py-3 text-gray-400 hover:text-white hover:bg-[#1a1d23] rounded-lg transition-colors text-sm text-left cursor-pointer"
         >
           <LogOut className="w-5 h-5 mr-3" />
           Logout
-        </Link>
+        </button>
       </div>
     </aside>
   );

@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { LayoutGrid, User, BookOpen, QrCode, Bell, AlertTriangle, LogOut, PlusSquare } from "lucide-react";
 import { useSidebarAnimation } from "../animations/usePageAnimation";
 
@@ -14,7 +15,14 @@ const navItems = [
 
 export function PatientSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const sidebarRef = useSidebarAnimation();
+
+  const handleLogout = (e: React.MouseEvent) => {
+    e.preventDefault();
+    localStorage.removeItem("respondaCare_session");
+    router.push("/");
+  };
 
   return (
     <aside
@@ -81,10 +89,13 @@ export function PatientSidebar() {
             <span className="text-xs font-medium text-white">Responders Online</span>
           </div>
         </div>
-        <Link href="/" className="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white transition-colors text-sm mt-2">
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-3 w-full px-4 py-3 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors text-sm text-left cursor-pointer mt-2"
+        >
           <LogOut className="w-4 h-4" />
           Logout
-        </Link>
+        </button>
       </div>
     </aside>
   );
