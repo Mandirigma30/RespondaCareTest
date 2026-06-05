@@ -120,6 +120,12 @@ export default function GatewayPage() {
                 <span>Login as First Responder</span>
                 <ArrowRight className="h-5 w-5" />
               </Link>
+              <Link
+                to="/register/responder"
+                className="mt-3 text-center w-full text-xs text-[#8b1a1a] hover:underline font-semibold block"
+              >
+                New responder? Register here
+              </Link>
             </div>
           </article>
         </div>

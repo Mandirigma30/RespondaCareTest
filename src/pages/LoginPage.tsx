@@ -7,14 +7,87 @@ import { FormInput } from "../components/ui/FormInput";
 import { supabase, isPlaceholderUrl } from "../lib/supabase";
 
 // Sandbox credential map: email → role
-const SANDBOX_USERS: Record<string, { role: "patient" | "responder" | "admin"; name: string }> = {
-  "admin@respondacare.ph":     { role: "admin",     name: "Dispatch Admin" },
-  "responder@respondacare.ph": { role: "responder", name: "Medic Unit Alpha" },
-  "resident@respondacare.ph":  { role: "patient",   name: "Juan Dela Cruz" },
+const SANDBOX_USERS: Record<string, { role: "patient" | "responder" | "admin"; name: string; secret: string }> = {
+  "admin@respondacare.ph":     { role: "admin",     name: "Dispatch Admin", secret: "JBSWY3DPEHPK3PXP" }, // Hello! in base32
+  "responder@respondacare.ph": { role: "responder", name: "Medic Unit Alpha", secret: "MFRGGZDFMZTWQ2LK" }, // Responder in base32
+  "resident@respondacare.ph":  { role: "patient",   name: "Juan Dela Cruz", secret: "" },
 };
 
 const SANDBOX_PASSWORD = "password123";
-const SANDBOX_OTP = "123456";
+
+// Helper functions for client-side WebCrypto TOTP validation
+function base32tohex(base32: string) {
+  const base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  let hex = "";
+  for (let i = 0; i < base32.length; i++) {
+    const val = base32chars.indexOf(base32.charAt(i).toUpperCase());
+    if (val === -1) continue;
+    bits += val.toString(2).padStart(5, '0');
+  }
+  for (let i = 0; i + 4 <= bits.length; i += 4) {
+    const chunk = bits.substr(i, 4);
+    hex = hex + parseInt(chunk, 2).toString(16);
+  }
+  return hex;
+}
+
+async function hex2buf(hex: string): Promise<Uint8Array> {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
+}
+
+async function getTOTPAtTime(secretBase32: string, time: number): Promise<string> {
+  try {
+    const keyHex = base32tohex(secretBase32);
+    const keyBytes = await hex2buf(keyHex);
+    const timeHex = time.toString(16).padStart(16, '0');
+    const timeBytes = await hex2buf(timeHex);
+
+    const cryptoKey = await window.crypto.subtle.importKey(
+      "raw",
+      keyBytes as any,
+      { name: "HMAC", hash: { name: "SHA-1" } },
+      false,
+      ["sign"]
+    );
+
+    const signature = await window.crypto.subtle.sign(
+      "HMAC",
+      cryptoKey,
+      timeBytes as any
+    );
+
+    const hmac = new Uint8Array(signature);
+    const offset = hmac[hmac.length - 1] & 0xf;
+    const otp = (
+      ((hmac[offset] & 0x7f) << 24) |
+      ((hmac[offset + 1] & 0xff) << 16) |
+      ((hmac[offset + 2] & 0xff) << 8) |
+      (hmac[offset + 3] & 0xff)
+    ) % 1000000;
+
+    return otp.toString().padStart(6, '0');
+  } catch (err) {
+    console.error("TOTP derivation error", err);
+    return "";
+  }
+}
+
+async function verifyTOTP(secretBase32: string, code: string): Promise<boolean> {
+  const cleanSecret = secretBase32.replace(/=/g, "").replace(/\s/g, "");
+  const epoch = Math.round(new Date().getTime() / 1000.0);
+  const time = Math.floor(epoch / 30);
+  
+  for (let i = -1; i <= 1; i++) {
+    const calcCode = await getTOTPAtTime(cleanSecret, time + i);
+    if (calcCode === code) return true;
+  }
+  return false;
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -31,9 +104,28 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [detectedRole, setDetectedRole] = useState<"patient" | "responder" | "admin" | null>(null);
+  const [currentOtpCode, setCurrentOtpCode] = useState("");
 
   // References for OTP fields focus management
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (step === 2) {
+      const trimmedEmail = email.trim().toLowerCase();
+      const sandboxUser = SANDBOX_USERS[trimmedEmail];
+      if (sandboxUser && sandboxUser.secret) {
+        const updateOtp = async () => {
+          const epoch = Math.round(new Date().getTime() / 1000.0);
+          const time = Math.floor(epoch / 30);
+          const code = await getTOTPAtTime(sandboxUser.secret, time);
+          setCurrentOtpCode(code);
+        };
+        updateOtp();
+        const interval = setInterval(updateOtp, 1000);
+        return () => clearInterval(interval);
+      }
+    }
+  }, [step, email]);
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -149,14 +241,19 @@ export default function LoginPage() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     try {
-      const isSandboxVerify = token === SANDBOX_OTP;
+      const trimmedEmail = email.trim().toLowerCase();
+      const sandboxUser = SANDBOX_USERS[trimmedEmail];
+      const finalRole = detectedRole || sandboxUser?.role || "responder";
       const isRealUser = !isPlaceholderUrl;
 
-      if (isSandboxVerify || isRealUser) {
-        const trimmedEmail = email.trim().toLowerCase();
-        const sandboxUser = SANDBOX_USERS[trimmedEmail];
-        const finalRole = detectedRole || sandboxUser?.role || "responder";
+      let isVerified = false;
+      if (sandboxUser && sandboxUser.secret) {
+        isVerified = await verifyTOTP(sandboxUser.secret, token);
+      } else {
+        isVerified = token === "123456" || isRealUser;
+      }
 
+      if (isVerified || isRealUser) {
         // Save session with role mapping
         localStorage.setItem(
           "respondaCare_session",
@@ -177,7 +274,7 @@ export default function LoginPage() {
           navigate("/responder/dispatch");
         }
       } else {
-        setError("Invalid security token. Use sandbox code: 123456");
+        setError("Invalid security token. Please enter the correct Authenticator code.");
       }
     } catch (err: any) {
       setError(err.message || "MFA validation failed.");
@@ -312,9 +409,20 @@ export default function LoginPage() {
                 <p className="text-sm text-[#8b949e] leading-relaxed">
                   Enter the 6-digit TOTP verification token from your authenticator app.
                 </p>
-                <p className="text-xs font-mono text-[#8b949e]">
-                  Sandbox Code: <span className="text-[#ff5555] font-bold">123456</span>
-                </p>
+                {email.trim().toLowerCase() in SANDBOX_USERS && SANDBOX_USERS[email.trim().toLowerCase()].secret ? (
+                  <div className="p-3 bg-[#0d1117] rounded-lg border border-white/[0.04] text-xs text-[#8b949e] space-y-1">
+                    <p>
+                      MFA Secret: <span className="text-white font-mono font-bold select-all">{SANDBOX_USERS[email.trim().toLowerCase()].secret}</span>
+                    </p>
+                    <p>
+                      Current Active OTP: <span className="text-emerald-400 font-mono font-bold">{currentOtpCode || "calculating..."}</span>
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs font-mono text-[#8b949e]">
+                    Sandbox Code: <span className="text-[#ff5555] font-bold">123456</span>
+                  </p>
+                )}
               </div>
 
               {/* 6 OTP Boxes */}

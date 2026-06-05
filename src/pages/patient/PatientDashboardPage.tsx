@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
-import { Download, Pill, HeartPulse, AlertTriangle, Loader2 } from "lucide-react";
+import { Download, Pill, AlertTriangle, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
-import { QRCodeSVG } from "qrcode.react";
+import { QRCodeCanvas } from "qrcode.react";
+import jsPDF from "jspdf";
 
 export default function PatientDashboardPage() {
   const ref = useRef<HTMLDivElement>(null);
@@ -22,10 +23,12 @@ export default function PatientDashboardPage() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const session = localStorage.getItem("respondaCare_session");
+      let currentName = "Alex Johnson";
       if (session) {
         try {
           const parsed = JSON.parse(session);
           if (parsed.name) {
+            currentName = parsed.name;
             setPatientName(parsed.name);
           }
         } catch (e) {}
@@ -37,7 +40,7 @@ export default function PatientDashboardPage() {
       if (residents) {
         try {
           const list = JSON.parse(residents);
-          const found = list.find((r: any) => r.name.toLowerCase().includes("juan") || r.name.toLowerCase().includes("alex"));
+          const found = list.find((r: any) => r.name.toLowerCase().includes(currentName.toLowerCase()) || r.name.toLowerCase().includes("juan") || r.name.toLowerCase().includes("alex"));
           if (found) {
             foundPayload = found.encryptedPayload;
             setQrPayload(foundPayload);
@@ -45,10 +48,10 @@ export default function PatientDashboardPage() {
         } catch (e) {}
       }
 
-      // If no encrypted medical card exists, auto-generate a valid client-side AES medical card for Alex Johnson!
+      // If no encrypted medical card exists, auto-generate a valid client-side AES medical card for the true resident name!
       if (!foundPayload) {
         const defaultRaw = {
-          name: "Alex Johnson",
+          name: currentName,
           age: 34,
           gender: "Male",
           barangay: "Brgy. 45, Pasay City",
@@ -65,7 +68,7 @@ export default function PatientDashboardPage() {
         import("../../lib/cryptoUtils").then(async ({ encryptPayload }) => {
           const payload = await encryptPayload(defaultRaw, "barangay45key");
           setQrPayload(payload);
-          const list = [{ name: "Alex Johnson", barangay: "Brgy. 45, Pasay City", encryptedPayload: payload }];
+          const list = [{ name: currentName, barangay: "Brgy. 45, Pasay City", encryptedPayload: payload }];
           localStorage.setItem("respondaCare_residents", JSON.stringify(list));
         });
       }
@@ -73,7 +76,52 @@ export default function PatientDashboardPage() {
   }, []);
 
   const handleDownloadPdf = () => {
-    window.print();
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [100, 150] });
+    
+    const canvas = document.querySelector("#qr-code-container canvas") as HTMLCanvasElement;
+    const qrDataUrl = canvas ? canvas.toDataURL("image/png") : "";
+
+    // Brand Header
+    doc.setFillColor(139, 26, 26);
+    doc.rect(0, 0, 100, 20, "F");
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("RespondaCare", 50, 10, { align: "center" });
+    
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    doc.text("EMERGENCY MEDICAL ID CARD", 50, 15, { align: "center" });
+
+    // Name
+    doc.setTextColor(15, 17, 21);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text(patientName, 50, 32, { align: "center" });
+
+    // QR Image
+    if (qrDataUrl) {
+      doc.addImage(qrDataUrl, "PNG", 25, 40, 50, 50);
+    }
+
+    // Metadata details
+    doc.setTextColor(100, 110, 120);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    doc.text("Verify Secure ID: RC-8829-X", 50, 100, { align: "center" });
+    doc.text("Barangay 45, Pasay City", 50, 105, { align: "center" });
+
+    // Compliance text
+    doc.setFillColor(245, 245, 245);
+    doc.rect(0, 132, 100, 18, "F");
+    doc.setTextColor(100, 100, 100);
+    doc.setFontSize(6);
+    doc.text("RA 10173 Philippine Data Privacy Act Compliant", 50, 138, { align: "center" });
+    doc.text("Encrypted PII block derived client-side via WebCrypto.", 50, 142, { align: "center" });
+    doc.text("Triage use only.", 50, 145, { align: "center" });
+
+    doc.save(`RespondaCare_ID_${patientName.replace(/\s+/g, "_")}.pdf`);
   };
 
   return (
@@ -175,8 +223,8 @@ export default function PatientDashboardPage() {
                 
                 {/* Real interactive QR code */}
                 {qrPayload ? (
-                  <div className="p-3 bg-white border border-gray-200 rounded-lg mb-4 flex items-center justify-center shadow-md">
-                    <QRCodeSVG
+                  <div id="qr-code-container" className="p-3 bg-white border border-gray-200 rounded-lg mb-4 flex items-center justify-center shadow-md">
+                    <QRCodeCanvas
                       value={qrPayload}
                       size={120}
                       level="H"
@@ -188,7 +236,7 @@ export default function PatientDashboardPage() {
                   </div>
                 )}
                 
-                <p className="text-[9px] font-mono font-bold text-gray-400 tracking-widest uppercase">
+                <p className="text-[9px] font-mono font-bold text-gray-400 tracking-widest uppercase mt-2">
                   Verify Secure ID: RC-8829-X
                 </p>
               </div>
@@ -197,11 +245,6 @@ export default function PatientDashboardPage() {
               <Button variant="primary" fullWidth onClick={handleDownloadPdf}>
                 <Download className="h-5 w-5" /> Download QR Card
               </Button>
-              <Link to="/patient/emergency" className="w-full block">
-                <Button variant="secondary" fullWidth className="mt-0 w-full">
-                  <HeartPulse className="h-5 w-5 text-red-500" /> Panic Reporting
-                </Button>
-              </Link>
             </div>
           </section>
 
@@ -231,3 +274,4 @@ export default function PatientDashboardPage() {
     </div>
   );
 }
+

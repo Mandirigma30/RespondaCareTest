@@ -160,6 +160,53 @@ export default function TurnoverPage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+
+    // Strict validation rules
+    if (!patientName.trim()) {
+      alert("Validation Error: Patient Name is required.");
+      return;
+    }
+    if (!patientAge.trim() || isNaN(Number(patientAge))) {
+      alert("Validation Error: A valid Patient Age is required.");
+      return;
+    }
+    if (!chiefComplaint.trim()) {
+      alert("Validation Error: Chief Complaint is required.");
+      return;
+    }
+    if (!bloodPressure.trim() || !bloodPressure.includes("/")) {
+      alert("Validation Error: Blood Pressure is required and must follow standard format (e.g. 120/80).");
+      return;
+    }
+    if (!pulseRate.trim() || isNaN(Number(pulseRate))) {
+      alert("Validation Error: Pulse Rate (BPM) must be a valid number.");
+      return;
+    }
+    if (!respiratoryRate.trim() || isNaN(Number(respiratoryRate))) {
+      alert("Validation Error: Respiratory Rate must be a valid number.");
+      return;
+    }
+    if (!spo2.trim() || isNaN(Number(spo2))) {
+      alert("Validation Error: SpO2 percentage must be a valid number.");
+      return;
+    }
+    if (!incidentLocation.trim()) {
+      alert("Validation Error: Incident Location is required.");
+      return;
+    }
+    if (!incidentDate) {
+      alert("Validation Error: Incident Date is required.");
+      return;
+    }
+    if (!incidentTime) {
+      alert("Validation Error: Dispatch Time is required.");
+      return;
+    }
+    if (!arrivalTime) {
+      alert("Validation Error: Arrival Time is required.");
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -185,6 +232,32 @@ export default function TurnoverPage() {
               severity_score: parseInt(severityScore)
             }]);
           if (incErr) throw incErr;
+
+          // Sync writes to emergency.handovers
+          const { error: handErr } = await supabase
+            .from("emergency.handovers")
+            .insert([{
+              incident_id: incidentId.includes("-") ? undefined : incidentId, // fallback
+              responder_id: "22222222-2222-2222-2222-222222222222",
+              patient_name: patientName,
+              receiving_hospital: hospitalName,
+              receiving_provider: receivingProvider,
+              transport_mode: transportMode,
+              gcs_total: gcsTotal,
+              severity_score: parseInt(severityScore),
+              response_outcome: "Successful",
+              turnover_notes: turnoverNotes
+            }]);
+          if (handErr) throw handErr;
+
+          // Append to audit log
+          await supabase
+            .from("security.audit_log")
+            .insert({
+              action: "SUBMIT_TURNOVER_REPORT",
+              target_table: "emergency.handovers",
+              details: { info: `Turnover report submitted for patient ${patientName}` }
+            });
         } catch (dbErr) {
           console.warn("[DATABASE SYNC OFFLINE FALLBACK] Database insertion skipped. Storing in local queue.", dbErr);
         }

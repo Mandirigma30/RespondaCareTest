@@ -6,6 +6,7 @@ import { TopBar } from "../../components/layout/TopBar";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { decryptPayload } from "../../lib/cryptoUtils";
+import { supabase, isPlaceholderUrl } from "../../lib/supabase";
 
 interface ScannedResident {
   id: string;
@@ -23,6 +24,20 @@ interface ScannedResident {
   };
 }
 
+const loadJsQR = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).jsQR) {
+      resolve((window as any).jsQR);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js";
+    script.onload = () => resolve((window as any).jsQR);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+};
+
 export default function QRScanPage() {
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -31,6 +46,11 @@ export default function QRScanPage() {
   const [localResidents, setLocalResidents] = useState<any[]>([]);
   const [manualId, setManualId] = useState("");
   const [scannedProfile, setScannedProfile] = useState<ScannedResident | null>(null);
+
+  // Camera States
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [streamActive, setStreamActive] = useState(false);
+  const scanActive = useRef(false);
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -49,56 +69,165 @@ export default function QRScanPage() {
     }
   }, []);
 
-  const handleSimulateScan = async (encryptedPayload: string) => {
+  async function startCamera() {
     try {
-      // Decrypt using security key "barangay45key"
-      const decrypted = (await decryptPayload(encryptedPayload, "barangay45key")) as any;
-      
-      const newProfile: ScannedResident = {
-        id: `RC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
-        name: decrypted.name,
-        age: decrypted.age,
-        barangay: decrypted.barangay,
-        bloodType: decrypted.bloodType || "O+",
-        sample: decrypted.sample
-      };
-
-      setScannedProfile(newProfile);
-      setScanned(true);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setStreamActive(true);
+        scanActive.current = true;
+        scanLoop(stream);
+      }
     } catch (err) {
-      console.error("Decryption failed", err);
+      console.warn("Could not start camera, scanner will run in manual input mode", err);
+    }
+  }
+
+  function stopCamera() {
+    scanActive.current = false;
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(t => t.stop());
+      videoRef.current.srcObject = null;
+    }
+    setStreamActive(false);
+  }
+
+  // Auto-start camera on mount
+  useEffect(() => {
+    startCamera();
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  async function scanLoop(_stream: MediaStream) {
+    let jsQR: any;
+    try {
+      jsQR = await loadJsQR();
+    } catch (e) {
+      console.error("Failed to load jsQR", e);
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const tick = async () => {
+      if (!scanActive.current) return;
+      if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && ctx) {
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height, {
+          inversionAttempts: "dontInvert",
+        });
+
+        if (code && code.data) {
+          scanActive.current = false;
+          stopCamera();
+          await handleResolvePayload(code.data);
+          return;
+        }
+      }
+      setTimeout(() => requestAnimationFrame(tick), 300);
+    };
+
+    requestAnimationFrame(tick);
+  }
+
+  async function handleResolvePayload(scannedText: string) {
+    try {
+      // 1. Try direct base64 decryption of QR payload
+      try {
+        const decrypted = (await decryptPayload(scannedText, "barangay45key")) as any;
+        if (decrypted) {
+          setScannedProfile({
+            id: decrypted.id || `RC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+            name: decrypted.name,
+            age: decrypted.age,
+            barangay: decrypted.barangay,
+            bloodType: decrypted.bloodType || "O+",
+            sample: decrypted.sample
+          });
+          setScanned(true);
+
+          if (!isPlaceholderUrl) {
+            await supabase.from("security.audit_log").insert({
+              action: "DECRYPT_LOOKUP",
+              target_table: "health.records",
+              details: { info: `First Responder successfully scanned and decrypted health profile for ${decrypted.name}` }
+            });
+          }
+          return;
+        }
+      } catch (e) {
+        // Direct decryption failed, try cache or database lookup
+      }
+
+      // 2. Check local residents cache
+      const foundLocal = localResidents.find(r => r.name.toLowerCase().includes(scannedText.toLowerCase()) || r.encryptedPayload === scannedText);
+      if (foundLocal) {
+        const decrypted = (await decryptPayload(foundLocal.encryptedPayload, "barangay45key")) as any;
+        setScannedProfile({
+          id: `RC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+          name: decrypted.name,
+          age: decrypted.age,
+          barangay: decrypted.barangay,
+          bloodType: decrypted.bloodType || "O+",
+          sample: decrypted.sample
+        });
+        setScanned(true);
+        return;
+      }
+
+      // 3. Query live Supabase schemas
+      if (!isPlaceholderUrl) {
+        const { data: resData } = await supabase
+          .from("core.residents")
+          .select("encrypted_payload, resident_id")
+          .or(`resident_id.eq.${scannedText},contact_number.eq.${scannedText}`)
+          .maybeSingle();
+
+        if (resData?.encrypted_payload) {
+          const decrypted = (await decryptPayload(resData.encrypted_payload, "barangay45key")) as any;
+          setScannedProfile({
+            id: resData.resident_id,
+            name: decrypted.name,
+            age: decrypted.age,
+            barangay: decrypted.barangay,
+            bloodType: decrypted.bloodType || "O+",
+            sample: decrypted.sample
+          });
+          setScanned(true);
+
+          await supabase.from("security.audit_log").insert({
+            action: "DECRYPT_LOOKUP_DB",
+            target_table: "core.residents",
+            target_id: resData.resident_id,
+            details: { info: `First Responder resolved lookup for resident ${resData.resident_id}` }
+          });
+          return;
+        }
+      }
+
+      alert("Verification error: Resident not found in cache/DB, or payload could not be decrypted.");
+    } catch (err) {
+      console.error(err);
       alert("Verification error: Security payload is corrupt or derived with an invalid key.");
     }
+  }
+
+  const handleSimulateScan = async (encryptedPayload: string) => {
+    await handleResolvePayload(encryptedPayload);
   };
 
   const handleSearchManual = async () => {
     if (!manualId.trim()) return;
-    
-    // Try decrypting input base64 string directly
-    try {
-      const decrypted = (await decryptPayload(manualId.trim(), "barangay45key")) as any;
-      const newProfile: ScannedResident = {
-        id: `RC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
-        name: decrypted.name,
-        age: decrypted.age,
-        barangay: decrypted.barangay,
-        bloodType: decrypted.bloodType || "O+",
-        sample: decrypted.sample
-      };
-      setScannedProfile(newProfile);
-      setScanned(true);
-      return;
-    } catch (e) {
-      // Ignore and proceed to name lookup
-    }
-
-    // Find in enrolled list
-    const found = localResidents.find(r => r.name.toLowerCase().includes(manualId.toLowerCase()));
-    if (found) {
-      handleSimulateScan(found.encryptedPayload);
-    } else {
-      alert("Resident not found in cache. Ensure they have been enrolled first or input the raw encrypted base64 payload.");
-    }
+    await handleResolvePayload(manualId.trim());
   };
 
   const proceedToUir = () => {
@@ -106,6 +235,12 @@ export default function QRScanPage() {
     // Cache inside sessionStorage to prefill long-form assessment
     sessionStorage.setItem("respondaCare_scanned_resident", JSON.stringify(scannedProfile));
     navigate("/responder/turnover");
+  };
+
+  const handleNewScan = () => {
+    setScanned(false);
+    setScannedProfile(null);
+    startCamera();
   };
 
   return (
@@ -147,14 +282,32 @@ export default function QRScanPage() {
             )}
 
             {/* Scanner Viewport */}
-            <div data-animate className="relative w-72 h-72 bg-[#161b22] rounded-3xl border-2 border-dashed border-[#30363d] flex items-center justify-center">
-              <div className="absolute top-4 left-4 w-8 h-8 border-t-2 border-l-2 border-[#8b1a1a] rounded-tl-lg" />
-              <div className="absolute top-4 right-4 w-8 h-8 border-t-2 border-r-2 border-[#8b1a1a] rounded-tr-lg" />
-              <div className="absolute bottom-4 left-4 w-8 h-8 border-b-2 border-l-2 border-[#8b1a1a] rounded-bl-lg" />
-              <div className="absolute bottom-4 right-4 w-8 h-8 border-b-2 border-r-2 border-[#8b1a1a] rounded-br-lg" />
+            <div data-animate className="relative w-80 h-80 bg-[#161b22] rounded-3xl border-2 border-dashed border-[#30363d] flex items-center justify-center overflow-hidden">
+              <div className="absolute top-4 left-4 w-8 h-8 border-t-2 border-l-2 border-[#8b1a1a] rounded-tl-lg z-10" />
+              <div className="absolute top-4 right-4 w-8 h-8 border-t-2 border-r-2 border-[#8b1a1a] rounded-tr-lg z-10" />
+              <div className="absolute bottom-4 left-4 w-8 h-8 border-b-2 border-l-2 border-[#8b1a1a] rounded-bl-lg z-10" />
+              <div className="absolute bottom-4 right-4 w-8 h-8 border-b-2 border-r-2 border-[#8b1a1a] rounded-br-lg z-10" />
+              
               {/* Scan Bar Animation */}
-              <div className="absolute inset-x-6 h-0.5 bg-red-500 opacity-80 animate-pulse" style={{ top: "50%" }} />
-              <QrCode className="w-24 h-24 text-[#8b1a1a]/30" />
+              <div className="absolute inset-x-6 h-0.5 bg-red-500 opacity-80 animate-pulse z-10" style={{ top: "50%" }} />
+              
+              {/* Video Element */}
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover absolute inset-0"
+              />
+              
+              {/* Fallback/Loading Overlay */}
+              {!streamActive && (
+                <div className="absolute inset-0 bg-[#161b22] flex flex-col items-center justify-center gap-3">
+                  <QrCode className="w-16 h-16 text-[#8b1a1a]/30" />
+                  <p className="text-xs text-gray-500">Initializing camera stream...</p>
+                  <Button size="sm" variant="secondary" onClick={startCamera}>Start Camera</Button>
+                </div>
+              )}
             </div>
 
             {/* Manual Search */}
@@ -163,7 +316,7 @@ export default function QRScanPage() {
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b949e]" />
                 <input
-                  placeholder="Enter Name or Encrypted Payload..."
+                  placeholder="Enter Resident ID, Name, or Payload..."
                   value={manualId}
                   onChange={(e) => setManualId(e.target.value)}
                   className="w-full bg-[#161b22] border border-[#30363d] rounded-xl pl-12 pr-4 py-4 text-white placeholder-[#8b949e] focus:outline-none focus:ring-1 focus:ring-[#8b1a1a]"
@@ -174,12 +327,13 @@ export default function QRScanPage() {
               </Button>
             </div>
           </div>
+
         ) : (
           scannedProfile && (
             <div className="max-w-2xl mx-auto space-y-5 animate-fadeIn">
               <div data-animate className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-white">Resident Decrypted Health Profile</h2>
-                <Button variant="ghost" size="sm" onClick={() => setScanned(false)}>← New Scan</Button>
+                <Button variant="ghost" size="sm" onClick={handleNewScan}>← New Scan</Button>
               </div>
 
               {/* Profile Header */}

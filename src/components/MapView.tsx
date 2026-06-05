@@ -1,6 +1,7 @@
-import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { useEffect } from "react";
 
 // Fix default icon issue in standard environments
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -28,15 +29,34 @@ interface Incident {
 
 interface MapViewProps {
   incidents: Incident[];
+  center?: [number, number];
+  zoom?: number;
 }
 
-export default function MapView({ incidents }: MapViewProps) {
-  const center: [number, number] = [14.5547, 121.0244]; // Barangay 45 Center coordinate fallback
+function MapController({ center, zoom }: { center: [number, number]; zoom: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, zoom);
+  }, [center, zoom, map]);
+  return null;
+}
+
+export default function MapView({ incidents, center, zoom = 16 }: MapViewProps) {
+  const defaultCenter: [number, number] = [14.5547, 121.0244]; // Barangay 45 Center coordinate fallback
+  const mapCenter = center || defaultCenter;
+
+  // Pasay City / Brgy 45 Bounding Box
+  const maxBounds: L.LatLngBoundsExpression = [
+    [14.540, 120.980],
+    [14.570, 121.030]
+  ];
 
   return (
     <MapContainer
-      center={center}
-      zoom={16}
+      center={mapCenter}
+      zoom={zoom}
+      maxBounds={maxBounds}
+      maxBoundsViscosity={1.0}
       className="w-full h-full"
       style={{ background: "#1a1d23", minHeight: "calc(100vh - 75px)" }}
     >
@@ -44,6 +64,7 @@ export default function MapView({ incidents }: MapViewProps) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <MapController center={mapCenter} zoom={zoom} />
       {incidents.map((inc) => {
         const color = colorMap[inc.type] ?? "#8b1a1a";
         const customIcon = L.divIcon({
@@ -81,3 +102,4 @@ export default function MapView({ incidents }: MapViewProps) {
     </MapContainer>
   );
 }
+
