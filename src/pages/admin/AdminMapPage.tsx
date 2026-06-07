@@ -65,7 +65,8 @@ export default function AdminMapPage() {
       // Live database query
       try {
         const { data, error } = await supabase
-          .from("emergency.incidents")
+          .schema("emergency")
+          .from("incidents")
           .select("*")
           .order("created_at", { ascending: false });
 

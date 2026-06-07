@@ -46,10 +46,12 @@ export default function EmergencyPage() {
     if (typeof window !== "undefined") {
       const session = localStorage.getItem("respondaCare_session");
       let patientEmail = "resident@respondacare.ph";
+      let patientName = "Alex Johnson";
       if (session) {
         try {
           const parsed = JSON.parse(session);
           patientEmail = parsed.email || patientEmail;
+          patientName = parsed.name || patientName;
         } catch (e) {}
       }
 
@@ -58,7 +60,7 @@ export default function EmergencyPage() {
       if (residents) {
         try {
           const list = JSON.parse(residents);
-          const found = list.find((r: any) => r.name.toLowerCase().includes("juan") || r.name.toLowerCase().includes("alex"));
+          const found = list.find((r: any) => r.name.toLowerCase() === patientName.toLowerCase() || r.name.toLowerCase().includes(patientName.toLowerCase()));
           if (found) {
             setQrPayload(found.encryptedPayload);
             setResidentProfile(found);

@@ -43,19 +43,30 @@ export default function AuditLogPage() {
   }, [logsList]);
 
   const loadAuditLogs = async () => {
+    // Load local storage logs first
+    let localLogs: AuditLogItem[] = [];
+    const localSaved = localStorage.getItem("respondaCare_auditLogs");
+    if (localSaved) {
+      try {
+        localLogs = JSON.parse(localSaved);
+      } catch (e) {}
+    }
+
     if (isPlaceholderUrl) {
-      setLogsList(defaultLogs);
+      setLogsList([...localLogs, ...defaultLogs]);
     } else {
       try {
         const { data, error } = await supabase
-          .from("security.audit_log")
+          .schema("security")
+          .from("audit_log")
           .select("*")
           .order("created_at", { ascending: false });
         
         if (error) throw error;
         if (data) {
           const { data: usersData } = await supabase
-            .from("security.users")
+            .schema("security")
+            .from("users")
             .select("user_id, full_name, role_id");
           
           const userMap = new Map(usersData?.map(u => [u.user_id, u]) || []);
@@ -97,10 +108,11 @@ export default function AuditLogPage() {
               dotColor: dotColor
             };
           });
-          setLogsList(mapped);
+          setLogsList([...localLogs, ...mapped]);
         }
       } catch (err) {
         console.error("Error fetching audit logs:", err);
+        setLogsList([...localLogs, ...defaultLogs]);
       }
     }
   };

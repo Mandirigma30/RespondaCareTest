@@ -159,13 +159,33 @@ export default function BhwEnrollment() {
       // 3. Cache inside localStorage for simulation scanning fallbacks
       const localResidents = JSON.parse(localStorage.getItem("respondaCare_residents") || "[]");
       localResidents.push({
+        id: `RC-${Math.floor(1000 + Math.random() * 9000)}`,
         name: fullName.trim(),
-        age: rawData.age,
-        gender: gender,
         barangay: rawData.barangay,
-        encryptedPayload: encryptedString
+        encryptedPayload: encryptedString,
+        dob: dateOfBirth,
+        gender: gender,
+        contact: contactNumber || "+63 917 123 4567",
+        address: address,
+        bloodType: bloodType,
+        vulnerability: pastMedicalHx ? "High" : "Low",
+        lastUpdated: new Date().toISOString().slice(0, 10),
       });
       localStorage.setItem("respondaCare_residents", JSON.stringify(localResidents));
+
+      // Save to local audit logs
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: "BHW Staff",
+        role: "bhw",
+        action: `Enrolled resident ${fullName.trim()} with encrypted medical card`,
+        resource: "core.residents",
+        ip: "127.0.0.1",
+        dotColor: "bg-green-500"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
 
       // Generate a mock unique Resident Serial
       const mockSerial = `RES-${Math.random().toString(36).substring(2, 11).toUpperCase()}`;

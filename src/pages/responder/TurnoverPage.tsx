@@ -235,7 +235,8 @@ export default function TurnoverPage() {
 
           // Sync writes to emergency.handovers
           const { error: handErr } = await supabase
-            .from("emergency.handovers")
+            .schema("emergency")
+            .from("handovers")
             .insert([{
               incident_id: incidentId.includes("-") ? undefined : incidentId, // fallback
               responder_id: "22222222-2222-2222-2222-222222222222",
@@ -252,7 +253,8 @@ export default function TurnoverPage() {
 
           // Append to audit log
           await supabase
-            .from("security.audit_log")
+            .schema("security")
+            .from("audit_log")
             .insert({
               action: "SUBMIT_TURNOVER_REPORT",
               target_table: "emergency.handovers",
@@ -265,6 +267,115 @@ export default function TurnoverPage() {
 
       setSyncStatus("Caching in local secure log queue (IndexedDB)...");
       await new Promise(r => setTimeout(r, 500));
+
+      // Save to local storage handovers
+      const localHandovers = JSON.parse(localStorage.getItem("respondaCare_handovers") || "[]");
+      const newHandover = {
+        id: incidentId || `INC-${Math.floor(1000 + Math.random() * 9000)}`,
+        responder_id: responderId || "FR-Alpha",
+        patient_name: patientName,
+        receiving_hospital: hospitalName,
+        receiving_provider: receivingProvider,
+        transport_mode: transportMode,
+        gcs_total: gcsTotal,
+        severity_score: parseInt(severityScore),
+        response_outcome: "Successful",
+        turnover_notes: turnoverNotes,
+        date: incidentDate,
+        time: incidentTime,
+        vitals: {
+          bp: bloodPressure,
+          pulse: pulseRate,
+          rr: respiratoryRate,
+          spo2: spo2,
+          temp: temperature,
+          glucose: bloodGlucose,
+        },
+        allergies: newAllergy,
+        medications: newMedication,
+        flagProfileUpdate
+      };
+      localHandovers.unshift(newHandover);
+      localStorage.setItem("respondaCare_handovers", JSON.stringify(localHandovers));
+
+      // Update incident status to Resolved in local storage
+      const cachedInc = localStorage.getItem("respondaCare_incidents");
+      if (cachedInc) {
+        try {
+          const list = JSON.parse(cachedInc);
+          const updated = list.map((inc: any) => inc.id === incidentId ? { ...inc, status: "Resolved" } : inc);
+          localStorage.setItem("respondaCare_incidents", JSON.stringify(updated));
+        } catch (e) {}
+      }
+
+      // Log to local audit trail
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: responderId || "First Responder",
+        role: "responder",
+        action: `Submitted turnover PCR report for patient ${patientName} (Incident #${incidentId})`,
+        resource: "emergency.handovers",
+        ip: "127.0.0.1",
+        dotColor: "bg-green-500"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
+
+      // If profile update is flagged, update the resident profile in local storage
+      if (flagProfileUpdate) {
+        const cachedResidents = localStorage.getItem("respondaCare_residents");
+        if (cachedResidents) {
+          try {
+            const list = JSON.parse(cachedResidents);
+            const residentIdx = list.findIndex((r: any) => r.name.toLowerCase() === patientName.toLowerCase());
+            if (residentIdx > -1) {
+              const resObj = list[residentIdx];
+              const { decryptPayload, encryptPayload } = await import("../../lib/cryptoUtils");
+              try {
+                const decrypted = (await decryptPayload(resObj.encryptedPayload, "barangay45key")) as any;
+                if (decrypted) {
+                  if (newAllergy) {
+                    decrypted.allergies = decrypted.allergies || {};
+                    decrypted.allergies.drug = decrypted.allergies.drug 
+                      ? `${decrypted.allergies.drug}, ${newAllergy}` 
+                      : newAllergy;
+                  }
+                  if (newMedication) {
+                    decrypted.medications = decrypted.medications || [];
+                    decrypted.medications.push({
+                      name: newMedication,
+                      dose: "As prescribed",
+                      freq: "Daily"
+                    });
+                  }
+                  
+                  // Update vitals with the new ones from turnover report
+                  decrypted.vitals = {
+                    bp: bloodPressure || decrypted.vitals?.bp,
+                    hr: pulseRate || decrypted.vitals?.hr,
+                    weight: decrypted.vitals?.weight,
+                    height: decrypted.vitals?.height,
+                    bgLevel: bloodGlucose || decrypted.vitals?.bgLevel
+                  };
+
+                  // Re-encrypt
+                  const reEncrypted = await encryptPayload(decrypted, "barangay45key");
+                  resObj.encryptedPayload = reEncrypted;
+                  resObj.bloodType = decrypted.bloodType || resObj.bloodType;
+                  resObj.vulnerability = "High";
+                  resObj.lastUpdated = new Date().toISOString().slice(0, 10);
+                  
+                  list[residentIdx] = resObj;
+                  localStorage.setItem("respondaCare_residents", JSON.stringify(list));
+                }
+              } catch (e) {
+                console.error("Failed to sync resident flags offline", e);
+              }
+            }
+          } catch (e) {}
+        }
+      }
 
       setSyncStatus("Constructing signed PDF clinical handover sheet...");
       await new Promise(r => setTimeout(r, 400));

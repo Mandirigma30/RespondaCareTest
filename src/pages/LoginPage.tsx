@@ -95,7 +95,8 @@ export default function LoginPage() {
   
   // State variables
   const [role, setRole] = useState<"patient" | "responder" | "admin" >("patient");
-  const [step, setStep] = useState<1 | 2>(1); // 1: Credentials, 2: MFA TOTP
+  const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Credentials, 2: MFA TOTP, 3: Shift Key
+  const [shiftKey, setShiftKey] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -163,17 +164,116 @@ export default function LoginPage() {
       const trimmedEmail = email.trim().toLowerCase();
       const sandboxUser = SANDBOX_USERS[trimmedEmail];
       const isSandboxUser = sandboxUser && password === SANDBOX_PASSWORD;
-      const isRealUser = !supabase.auth.getSession ? false : !isPlaceholderUrl;
+      const isRealUser = !isPlaceholderUrl;
 
-      if (isRealUser && !isSandboxUser) {
-        const { error: sbError } = await supabase.auth.signInWithPassword({
-          email: trimmedEmail,
-          password: password,
-        });
-        if (sbError) throw sbError;
+      if (isRealUser) {
+        try {
+          const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({
+            email: trimmedEmail,
+            password: password,
+          });
+          if (sbError) throw sbError;
+
+          // Fetch the user's real name from security.users table
+          if (sbData?.user) {
+            const { data: userData } = await supabase
+              .schema("security")
+              .from("users")
+              .select("full_name, role_id")
+              .eq("auth_uid", sbData.user.id)
+              .maybeSingle();
+
+            // Map role_id to role string
+            const roleMap: Record<number, "patient" | "responder" | "admin"> = {
+              1: "admin", 2: "admin", 3: "patient", 4: "responder", 5: "responder"
+            };
+            const realRole = userData?.role_id ? (roleMap[userData.role_id] || role) : role;
+            const realName = userData?.full_name || sbData.user.user_metadata?.full_name || sbData.user.email || trimmedEmail;
+
+            // Clear stale offline demo data
+            localStorage.removeItem("respondaCare_session");
+            localStorage.removeItem("respondaCare_residents");
+
+            // Save live session
+            localStorage.setItem(
+              "respondaCare_session",
+              JSON.stringify({
+                role: realRole,
+                email: trimmedEmail,
+                name: realName,
+                auth_uid: sbData.user.id,
+                live: true
+              })
+            );
+
+            setDetectedRole(realRole);
+            setSuccess(true);
+            await new Promise((r) => setTimeout(r, 600));
+            
+            if (realRole === "patient") {
+              navigate("/patient/dashboard");
+            } else {
+              setStep(2); // Proceed to MFA
+            }
+            return;
+          }
+        } catch (err: any) {
+          // Fallback: check if the user exists in our security.users table with the matching password
+          try {
+            const { data: dbUser, error: dbErr } = await supabase
+              .schema("security")
+              .from("users")
+              .select("user_id, full_name, role_id, password_hash")
+              .eq("email", trimmedEmail)
+              .maybeSingle();
+
+            if (!dbErr && dbUser && dbUser.password_hash === password) {
+              const roleMap: Record<number, "patient" | "responder" | "admin"> = {
+                1: "admin", 2: "admin", 3: "patient", 4: "responder", 5: "responder"
+              };
+              const realRole = roleMap[dbUser.role_id] || role;
+              const realName = dbUser.full_name;
+
+              // Clear any stale active Supabase Auth session token
+              await supabase.auth.signOut().catch(() => {});
+
+              localStorage.removeItem("respondaCare_session");
+              localStorage.removeItem("respondaCare_residents");
+
+              localStorage.setItem(
+                "respondaCare_session",
+                JSON.stringify({
+                  role: realRole,
+                  email: trimmedEmail,
+                  name: realName,
+                  auth_uid: dbUser.user_id,
+                  live: true
+                })
+              );
+
+              setDetectedRole(realRole);
+              setSuccess(true);
+              await new Promise((r) => setTimeout(r, 600));
+
+              if (realRole === "patient") {
+                navigate("/patient/dashboard");
+              } else {
+                setStep(2); // Proceed to MFA
+              }
+              return;
+            }
+          } catch (e) {
+            console.error("Database fallback auth failed:", e);
+          }
+
+          if (!isSandboxUser) {
+            throw err;
+          }
+        }
       }
 
-      if (isSandboxUser || isRealUser) {
+      // Offline mock / Sandbox fallback
+      if (isSandboxUser) {
         // Store detected role for routing
         const finalRole = sandboxUser?.role || role;
         setDetectedRole(finalRole);
@@ -186,6 +286,7 @@ export default function LoginPage() {
               role: "patient",
               email: trimmedEmail,
               name: sandboxUser?.name || trimmedEmail,
+              live: false
             })
           );
           setSuccess(true);
@@ -254,30 +355,82 @@ export default function LoginPage() {
       }
 
       if (isVerified || isRealUser) {
-        // Save session with role mapping
-        localStorage.setItem(
-          "respondaCare_session",
-          JSON.stringify({
-            role: finalRole,
-            email: trimmedEmail,
-            name: sandboxUser?.name || trimmedEmail,
-          })
-        );
-
-        setSuccess(true);
-        await new Promise((resolve) => setTimeout(resolve, 600));
-
-        // Route by role
-        if (finalRole === "admin") {
-          navigate("/admin/dashboard");
+        if (finalRole === "responder") {
+          setStep(3);
         } else {
-          navigate("/responder/dispatch");
+          // Save session with role mapping
+          localStorage.setItem(
+            "respondaCare_session",
+            JSON.stringify({
+              role: finalRole,
+              email: trimmedEmail,
+              name: sandboxUser?.name || trimmedEmail,
+              live: isRealUser
+            })
+          );
+
+          setSuccess(true);
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          navigate("/admin/dashboard");
         }
       } else {
         setError("Invalid security token. Please enter the correct Authenticator code.");
       }
     } catch (err: any) {
       setError(err.message || "MFA validation failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Shift Key validation (Step 3)
+  const handleShiftKeySubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (!shiftKey.trim()) {
+      setError("Please enter the active shift authentication key.");
+      return;
+    }
+
+    setLoading(true);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    try {
+      const trimmedEmail = email.trim().toLowerCase();
+      const sandboxUser = SANDBOX_USERS[trimmedEmail];
+      const isRealUser = !isPlaceholderUrl;
+
+      let isValid = false;
+      if (isRealUser) {
+        const { data, error: rpcError } = await supabase
+          .rpc("verify_shift_key", { p_key: shiftKey.trim() });
+        if (rpcError) throw rpcError;
+        isValid = !!data;
+      } else {
+        isValid = shiftKey.trim() === "RESP-ABCD-1234-EFGH";
+      }
+
+      if (isValid) {
+        // Save session with role mapping
+        localStorage.setItem(
+          "respondaCare_session",
+          JSON.stringify({
+            role: "responder",
+            email: trimmedEmail,
+            name: sandboxUser?.name || "Field Responder",
+            live: isRealUser
+          })
+        );
+
+        setSuccess(true);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        navigate("/responder/dispatch");
+      } else {
+        setError("Invalid shift key. Please contact the administrator to get today's active shift key.");
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to validate shift key.");
     } finally {
       setLoading(false);
     }
@@ -402,7 +555,7 @@ export default function LoginPage() {
                 </button>
               </form>
             </>
-          ) : (
+          ) : step === 2 ? (
             /* STEP 2: TOTP MFA FLOW */
             <form onSubmit={handleMfaSubmit} className="space-y-6">
               <div className="text-center space-y-2">
@@ -469,6 +622,52 @@ export default function LoginPage() {
                 >
                   <ArrowLeft className="h-4 w-4" />
                   <span>Back to Credentials</span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            /* STEP 3: SHIFT KEY FLOW */
+            <form onSubmit={handleShiftKeySubmit} className="space-y-6">
+              <div className="text-center space-y-2">
+                <p className="text-sm text-[#8b949e] leading-relaxed">
+                  Responders must enter today's active daily shift key to authorize dispatch operations.
+                </p>
+              </div>
+
+              <FormInput
+                id="shiftKey"
+                type="text"
+                label="Active Shift Key"
+                placeholder="RESP-XXXX-XXXX-XXXX"
+                value={shiftKey}
+                onChange={(e) => setShiftKey(e.target.value)}
+                icon={<Shield className="h-5 w-5" />}
+                required
+              />
+
+              <div className="space-y-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={loading || success || !shiftKey.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-4 rounded-lg transition-colors shadow-lg shadow-red-900/20 cursor-pointer disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span>Verifying...</span>
+                    </>
+                  ) : (
+                    <span>Validate Shift & Begin Duty</span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  className="w-full flex items-center justify-center gap-2 text-[#8b949e] hover:text-white text-xs font-semibold py-2 transition-colors cursor-pointer"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Back to TOTP</span>
                 </button>
               </div>
             </form>

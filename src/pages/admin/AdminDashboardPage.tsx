@@ -85,7 +85,8 @@ export default function AdminDashboardPage() {
       // Live database query
       try {
         const { data, error } = await supabase
-          .from("emergency.incidents")
+          .schema("emergency")
+          .from("incidents")
           .select("*")
           .order("created_at", { ascending: false });
 
@@ -123,7 +124,8 @@ export default function AdminDashboardPage() {
           
           // Count total registered residents from Supabase
           const { count: resCount } = await supabase
-            .from("core.residents")
+            .schema("core")
+            .from("residents")
             .select("*", { count: "exact", head: true });
           
           setStats({

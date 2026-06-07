@@ -80,7 +80,8 @@ export default function ResidentsPage() {
     } else {
       try {
         const { data, error } = await supabase
-          .from("core.residents")
+          .schema("core")
+          .from("residents")
           .select(`
             resident_id,
             address,
@@ -99,15 +100,35 @@ export default function ResidentsPage() {
         if (error) throw error;
         if (data) {
           const { data: usersData } = await supabase
-            .from("security.users")
+            .schema("security")
+            .from("users")
             .select("user_id, full_name, email");
           
           const userMap = new Map(usersData?.map(u => [u.user_id, u]) || []);
           
-          const mapped = data.map((res: any) => {
+          const mappedPromises = data.map(async (res: any) => {
             const user = userMap.get(res.user_id);
             const birthYear = res.date_of_birth ? new Date(res.date_of_birth).getFullYear() : 1990;
-            const age = new Date().getFullYear() - birthYear;
+            let age = new Date().getFullYear() - birthYear;
+            let bloodType = "O+";
+            let vulnerability = res.mobility_status || "Low";
+            let gender = res.gender;
+
+            if (res.encrypted_payload) {
+              try {
+                const decrypted = (await decryptPayload(res.encrypted_payload, "barangay45key")) as any;
+                if (decrypted) {
+                  if (decrypted.bloodType) bloodType = decrypted.bloodType;
+                  if (decrypted.age) age = decrypted.age;
+                  if (decrypted.gender) gender = decrypted.gender;
+                  if (decrypted.sample?.s && decrypted.sample?.s !== "None on record") {
+                    vulnerability = "High";
+                  }
+                }
+              } catch (e) {
+                console.error("Failed to decrypt resident payload for table listing", e);
+              }
+            }
 
             return {
               id: res.resident_id,
@@ -115,11 +136,11 @@ export default function ResidentsPage() {
               age: age,
               zone: res.address?.includes("Zone 2") ? "Zone 2" : res.address?.includes("Zone 3") ? "Zone 3" : res.address?.includes("Zone 4") ? "Zone 4" : "Zone 1",
               contact: res.contact_number || "N/A",
-              bloodType: "O+", 
-              vulnerability: (res.mobility_status || "Low") as any,
+              bloodType: bloodType, 
+              vulnerability: vulnerability as any,
               lastUpdated: new Date(res.created_at).toISOString().slice(0, 10),
               encrypted_payload: res.encrypted_payload,
-              gender: res.gender,
+              gender: gender,
               dob: res.date_of_birth,
               address: res.address,
               next_of_kin_name: res.next_of_kin_name,
@@ -128,6 +149,8 @@ export default function ResidentsPage() {
               email: user?.email || "N/A"
             };
           });
+
+          const mapped = await Promise.all(mappedPromises);
           setResidentsList(mapped);
         }
       } catch (err) {
@@ -152,7 +175,7 @@ export default function ResidentsPage() {
 
         // Audit log sync
         if (!isPlaceholderUrl) {
-          await supabase.from("security.audit_log").insert({
+          await supabase.schema("security").from("audit_log").insert({
             action: "DECRYPT_LOOKUP_ADMIN",
             target_table: "core.residents",
             target_id: res.id,
@@ -332,7 +355,7 @@ export default function ResidentsPage() {
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-[#0d1117] p-4 rounded-xl border border-white/[0.02]">
                     <div>
                       <p className="text-xs text-gray-500">Full Name</p>
-                      <p className="font-semibold text-white mt-0.5">{selectedResident.name}</p>
+                      <p className="font-semibold text-white mt-0.5">{decryptedMedical?.name ?? selectedResident.name}</p>
                     </div>
                     <div>
                       <p className="text-xs text-gray-500">Date of Birth</p>
@@ -340,7 +363,15 @@ export default function ResidentsPage() {
                     </div>
                     <div>
                       <p className="text-xs text-gray-500">Age / Gender</p>
-                      <p className="text-gray-300 mt-0.5">{selectedResident.age} years / {selectedResident.gender || "N/A"}</p>
+                      <p className="text-gray-300 mt-0.5">
+                        {decryptedMedical?.age ?? selectedResident.age} years / {decryptedMedical?.gender ?? selectedResident.gender ?? "N/A"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Blood Type</p>
+                      <p className="text-[#e53e3e] font-semibold mt-0.5">
+                        {decryptedMedical?.bloodType ?? selectedResident.bloodType ?? "N/A"}
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs text-gray-500">Contact Number</p>
@@ -352,7 +383,11 @@ export default function ResidentsPage() {
                     </div>
                     <div>
                       <p className="text-xs text-gray-500">Vulnerability Status</p>
-                      <p className="mt-1"><Badge variant={vulnMap[selectedResident.vulnerability]}>{selectedResident.vulnerability}</Badge></p>
+                      <p className="mt-1">
+                        <Badge variant={vulnMap[decryptedMedical?.sample?.s && decryptedMedical?.sample?.s !== "None on record" ? "High" : selectedResident.vulnerability]}>
+                          {decryptedMedical?.sample?.s && decryptedMedical?.sample?.s !== "None on record" ? "High" : selectedResident.vulnerability}
+                        </Badge>
+                      </p>
                     </div>
                     <div className="col-span-2 md:col-span-3">
                       <p className="text-xs text-gray-500">Home Address</p>
@@ -415,6 +450,36 @@ export default function ResidentsPage() {
                         <p className="text-xs text-gray-500 font-bold uppercase font-mono">Current Medications</p>
                         <p className="text-green-300 mt-1 font-semibold whitespace-pre-line">{decryptedMedical.sample?.m || "None on record"}</p>
                       </div>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-white/[0.04] pt-4">
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Blood Pressure</p>
+                          <p className="text-gray-200 mt-1 font-mono">{decryptedMedical.vitals?.bp || "N/A"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Heart Rate</p>
+                          <p className="text-gray-200 mt-1 font-mono">{decryptedMedical.vitals?.hr ? `${decryptedMedical.vitals.hr} bpm` : "N/A"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Blood Glucose</p>
+                          <p className="text-gray-200 mt-1 font-mono">{decryptedMedical.vitals?.bgLevel ? `${decryptedMedical.vitals.bgLevel} mg/dL` : "N/A"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Smoking Status</p>
+                          <p className="text-gray-200 mt-1">{decryptedMedical.smoke || "N/A"}</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-white/[0.04] pt-4">
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Weight</p>
+                          <p className="text-gray-200 mt-1">{decryptedMedical.vitals?.weight ? `${decryptedMedical.vitals.weight} kg` : "N/A"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 font-bold uppercase">Height</p>
+                          <p className="text-gray-200 mt-1">{decryptedMedical.vitals?.height ? `${decryptedMedical.vitals.height} cm` : "N/A"}</p>
+                        </div>
+                      </div>
+
                       {decryptedMedical.sample?.p && (
                         <div className="border-t border-white/[0.04] pt-4">
                           <p className="text-xs text-gray-500 font-bold uppercase">Clinical Notes</p>

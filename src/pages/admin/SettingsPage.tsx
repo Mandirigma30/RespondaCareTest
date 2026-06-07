@@ -7,12 +7,13 @@ import { FormInput, FormSelect } from "../../components/ui/FormInput";
 import { Button } from "../../components/ui/Button";
 import { supabase, isPlaceholderUrl } from "../../lib/supabase";
 
-type Tab = "profile" | "notifications" | "security" | "system";
+type Tab = "profile" | "notifications" | "security" | "shiftKeys" | "system";
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "profile", label: "Profile", icon: User },
   { key: "notifications", label: "Notifications", icon: Bell },
   { key: "security", label: "Security", icon: Lock },
+  { key: "shiftKeys", label: "Shift Keys", icon: Shield },
   { key: "system", label: "System", icon: Database },
 ];
 
@@ -28,6 +29,12 @@ export default function SettingsPage() {
   const [barangayZone, setBarangayZone] = useState("Barangay 45 — Pasay City");
   const [userRole, setUserRole] = useState("System Administrator");
 
+  // Notification Preferences State
+  const [notifPrefs, setNotifPrefs] = useState<boolean[]>([true, true, true, false, false]);
+
+  // Shift Key State
+  const [activeShiftKey, setActiveShiftKey] = useState("RESP-ABCD-1234-EFGH");
+
   // Animations
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -35,6 +42,20 @@ export default function SettingsPage() {
     }, ref);
     return () => ctx.revert();
   }, [tab]);
+
+  // Load saved preferences and shift key
+  useEffect(() => {
+    const saved = localStorage.getItem("respondaCare_notificationPrefs");
+    if (saved) {
+      try {
+        setNotifPrefs(JSON.parse(saved));
+      } catch (e) {}
+    }
+    const cachedKey = localStorage.getItem("respondaCare_activeShiftKey");
+    if (cachedKey) {
+      setActiveShiftKey(cachedKey);
+    }
+  }, []);
 
   // Load profile details from session and database
   useEffect(() => {
@@ -55,7 +76,8 @@ export default function SettingsPage() {
             
             if (!isPlaceholderUrl) {
               const { data } = await supabase
-                .from("security.users")
+                .schema("security")
+                .from("users")
                 .select("*")
                 .eq("email", userEmail.toLowerCase())
                 .maybeSingle();
@@ -68,6 +90,12 @@ export default function SettingsPage() {
                 setEmail(data.email || userEmail);
                 setBarangayZone(data.barangay_id === 2 ? "Barangay 46 — Pasay City" : "Barangay 45 — Pasay City");
                 setUserRole(data.role_id === 1 ? "System Administrator" : "First Responder");
+              }
+
+              // Load notification preferences from auth user metadata
+              const { data: authData } = await supabase.auth.getUser();
+              if (authData?.user?.user_metadata?.notification_prefs) {
+                setNotifPrefs(authData.user.user_metadata.notification_prefs);
               }
             }
           }
@@ -94,7 +122,8 @@ export default function SettingsPage() {
 
       if (!isPlaceholderUrl) {
         const { error } = await supabase
-          .from("security.users")
+          .schema("security")
+          .from("users")
           .update({
             full_name: `${firstName} ${lastName}`,
             phone: phone
@@ -103,7 +132,7 @@ export default function SettingsPage() {
         
         if (error) throw error;
         
-        await supabase.from("security.audit_log").insert({
+        await supabase.schema("security").from("audit_log").insert({
           action: "UPDATE",
           target_table: "security.users",
           details: { info: `User updated profile: ${firstName} ${lastName}` }
@@ -113,6 +142,45 @@ export default function SettingsPage() {
     } catch (err: any) {
       console.error(err);
       alert(err.message || "Failed to update profile.");
+    }
+  };
+
+  const handleRotateShiftKey = async () => {
+    try {
+      const { generateAuthKey } = await import("../../lib/cryptoUtils");
+      const newKey = generateAuthKey();
+      setActiveShiftKey(newKey);
+      localStorage.setItem("respondaCare_activeShiftKey", newKey);
+
+      if (!isPlaceholderUrl) {
+        const { error } = await supabase.rpc("generate_shift_key", { p_key: newKey });
+        if (error) throw error;
+        
+        await supabase.schema("security").from("audit_log").insert({
+          action: "ROTATE_SHIFT_KEY",
+          target_table: "security.shift_keys",
+          details: { info: `Admin rotated daily responder shift key. Active key is now active.` }
+        });
+      }
+
+      // Log in local audit logs
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: `${firstName} ${lastName}`.trim() || "Administrator",
+        role: "admin",
+        action: "Rotated responder shift key",
+        resource: "security.shift_keys",
+        ip: "127.0.0.1",
+        dotColor: "bg-[#8b1a1a]"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
+
+      alert(`Shift key rotated successfully! New key: ${newKey}`);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to rotate shift key.");
     }
   };
 
@@ -187,13 +255,56 @@ export default function SettingsPage() {
                     </div>
                     <label className="flex items-center cursor-pointer ml-6">
                       <div className="relative">
-                        <input type="checkbox" defaultChecked={i < 3} className="sr-only peer" />
+                        <input 
+                          type="checkbox" 
+                          checked={notifPrefs[i] ?? false} 
+                          onChange={() => {
+                            const updated = [...notifPrefs];
+                            updated[i] = !updated[i];
+                            setNotifPrefs(updated);
+                          }}
+                          className="sr-only peer" 
+                        />
                         <div className="w-11 h-6 bg-gray-700 peer-focus:ring-2 peer-focus:ring-[#8b1a1a] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8b1a1a]" />
                       </div>
                     </label>
                   </div>
                 ))}
-                <Button onClick={() => alert("Notification preferences updated.")}><Bell className="w-4 h-4 mr-1.5" /> Save Preferences</Button>
+                <Button 
+                  onClick={async () => {
+                    localStorage.setItem("respondaCare_notificationPrefs", JSON.stringify(notifPrefs));
+                    
+                    if (!isPlaceholderUrl) {
+                      try {
+                        const { error } = await supabase.auth.updateUser({
+                          data: {
+                            notification_prefs: notifPrefs
+                          }
+                        });
+                        if (error) throw error;
+                      } catch (err: any) {
+                        console.error("Failed to sync notification preferences to Supabase:", err);
+                      }
+                    }
+
+                    // Log in local audit logs
+                    const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+                    localLogs.unshift({
+                      ts: new Date().toISOString().slice(0, 10),
+                      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      user: `${firstName} ${lastName}`.trim() || "Administrator",
+                      role: "admin",
+                      action: "Updated notification preferences settings",
+                      resource: "security.users",
+                      ip: "127.0.0.1",
+                      dotColor: "bg-blue-400"
+                    });
+                    localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
+                    alert("Notification preferences saved successfully.");
+                  }}
+                >
+                  <Bell className="w-4 h-4 mr-1.5" /> Save Preferences
+                </Button>
               </div>
             )}
             {tab === "security" && (
@@ -214,6 +325,30 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <Button onClick={() => alert("Password updated successfully.")}><Lock className="w-4 h-4 mr-1.5" /> Update Password</Button>
+              </div>
+            )}
+            {tab === "shiftKeys" && (
+              <div className="bg-[#1a1d23] rounded-2xl p-8 border border-[#2d333b] space-y-6 shadow-2xl">
+                <h3 className="font-bold text-white text-lg">Daily Shift Key Manager</h3>
+                <p className="text-[#8b949e] text-sm leading-relaxed">
+                  Generate and rotate active daily shift authentication credentials for field emergency responders. Responders must enter the active key upon logging in.
+                </p>
+                
+                <div className="p-5 bg-[#0c0f16] rounded-xl border border-[#2d333b] flex flex-col md:flex-row items-center justify-between gap-4">
+                  <div>
+                    <p className="text-[#8b949e] text-xs font-bold uppercase tracking-wider">Active Shift Key For Today</p>
+                    <p className="text-white font-mono text-2xl font-bold mt-1 tracking-widest select-all">
+                      {activeShiftKey || "RESP-ABCD-1234-EFGH"}
+                    </p>
+                  </div>
+                  <Button onClick={handleRotateShiftKey}>
+                    <Shield className="w-4 h-4 mr-1.5" /> Rotate Shift Key
+                  </Button>
+                </div>
+
+                <div className="text-xs text-[#8b949e] bg-[#0c0f16]/30 p-3 rounded-lg border border-[#2d333b]/45">
+                  💡 <strong>Security Tip:</strong> Share this key with duty responders at the beginning of their shift. Generating a new key will instantly invalidate the previous key.
+                </div>
               </div>
             )}
             {tab === "system" && (

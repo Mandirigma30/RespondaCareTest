@@ -55,7 +55,8 @@ export default function DispatchPage() {
       if (!isPlaceholderUrl) {
         try {
           const { data, error } = await supabase
-            .from("emergency.incidents")
+            .schema("emergency")
+            .from("incidents")
             .select("*")
             .in("status", ["Active", "Dispatched", "On-Scene"])
             .order("created_at", { ascending: false });
@@ -84,15 +85,17 @@ export default function DispatchPage() {
       if (cached) {
         try {
           const list = JSON.parse(cached);
-          const mapped: DispatchItem[] = list.map((inc: any) => ({
-            id: inc.id || "#INC-9999",
-            type: inc.category || "Emergency SOS",
-            address: inc.barangay || "Zone 3, Pasay City",
-            eta: "5 min",
-            priority: "critical",
-            icon: "🚨",
-            status: "Active"
-          }));
+          const mapped: DispatchItem[] = list
+            .filter((inc: any) => inc.status !== "Resolved")
+            .map((inc: any) => ({
+              id: inc.id || "#INC-9999",
+              type: inc.category || "Emergency SOS",
+              address: inc.barangay || "Zone 3, Pasay City",
+              eta: "5 min",
+              priority: "critical",
+              icon: "🚨",
+              status: inc.status || "Active"
+            }));
           setDispatches([...mapped, ...defaultDispatches]);
         } catch (e) {}
       }
@@ -130,10 +133,35 @@ export default function DispatchPage() {
       // Update local state
       setDispatches(dispatches.map(d => d.id === id ? { ...d, status: "On-Scene" } : d));
 
+      // Update local storage cache
+      const cached = localStorage.getItem("respondaCare_incidents");
+      if (cached) {
+        try {
+          const list = JSON.parse(cached);
+          const updated = list.map((inc: any) => inc.id === id ? { ...inc, status: "On-Scene" } : inc);
+          localStorage.setItem("respondaCare_incidents", JSON.stringify(updated));
+        } catch (e) {}
+      }
+
+      // Log to local audit trail
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: responderName,
+        role: "responder",
+        action: `First Responder marked incident ${id} as arrived (On-Scene)`,
+        resource: "emergency.incidents",
+        ip: "127.0.0.1",
+        dotColor: "bg-orange-400"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
+
       // Sync with Supabase if live
       if (!isPlaceholderUrl) {
         const { error } = await supabase
-          .from("emergency.incidents")
+          .schema("emergency")
+          .from("incidents")
           .update({ status: "On-Scene", arrival_time: new Date().toISOString() })
           .eq("incident_id", id);
         
@@ -141,7 +169,8 @@ export default function DispatchPage() {
 
         // Append to audit log
         await supabase
-          .from("security.audit_log")
+          .schema("security")
+          .from("audit_log")
           .insert({
             action: "MARK_ARRIVED",
             target_table: "emergency.incidents",

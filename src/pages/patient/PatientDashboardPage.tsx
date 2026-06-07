@@ -5,11 +5,14 @@ import { Link } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { QRCodeCanvas } from "qrcode.react";
 import jsPDF from "jspdf";
+import { supabase } from "../../lib/supabase";
 
 export default function PatientDashboardPage() {
   const ref = useRef<HTMLDivElement>(null);
   const [qrPayload, setQrPayload] = useState("");
-  const [patientName, setPatientName] = useState("Alex Johnson");
+  const [patientName, setPatientName] = useState("");
+  const [decryptedProfile, setDecryptedProfile] = useState<any>(null);
+  const [patientId, setPatientId] = useState("RC-8829-X");
   
   // Stagger entry animations
   useEffect(() => {
@@ -21,40 +24,108 @@ export default function PatientDashboardPage() {
 
   // Sync user details and medical card
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    const loadUser = async () => {
+      let currentName = "";
+      let sessionUserId = "";
+
+      // 1. Prioritize localStorage session details
       const session = localStorage.getItem("respondaCare_session");
-      let currentName = "Alex Johnson";
       if (session) {
         try {
           const parsed = JSON.parse(session);
-          if (parsed.name) {
+          if (parsed.name && parsed.name !== "Alex Johnson") {
             currentName = parsed.name;
-            setPatientName(parsed.name);
+            sessionUserId = parsed.auth_uid;
           }
         } catch (e) {}
       }
 
-      const residents = localStorage.getItem("respondaCare_residents");
+      // 2. Fall back to Supabase auth user if no session in localStorage
+      const { data: authData } = await supabase.auth.getUser();
+      if (!currentName && authData?.user) {
+        currentName =
+          authData.user.user_metadata?.full_name ||
+          authData.user.user_metadata?.name ||
+          authData.user.email ||
+          "";
+        sessionUserId = authData.user.id;
+      }
+
+      if (currentName) setPatientName(currentName);
+
+      // 3. Find encrypted medical card: try Database query first, then fallback to local storage
       let foundPayload = "";
-      
-      if (residents) {
-        try {
-          const list = JSON.parse(residents);
-          const found = list.find((r: any) => r.name.toLowerCase().includes(currentName.toLowerCase()) || r.name.toLowerCase().includes("juan") || r.name.toLowerCase().includes("alex"));
-          if (found) {
-            foundPayload = found.encryptedPayload;
-            setQrPayload(foundPayload);
+      let isSyncedInSupabase = false;
+
+      if (sessionUserId) {
+        const { data: resData, error: checkError } = await supabase
+          .schema("core")
+          .from("residents")
+          .select("resident_id, encrypted_payload")
+          .eq("user_id", sessionUserId)
+          .maybeSingle();
+        
+        if (checkError) {
+          console.error("Error checking core.residents:", checkError);
+        }
+
+        if (resData?.encrypted_payload) {
+          foundPayload = resData.encrypted_payload;
+          isSyncedInSupabase = true;
+          if (resData.resident_id) {
+            setPatientId("RC-" + resData.resident_id.substring(0, 6).toUpperCase());
           }
-        } catch (e) {}
+        }
       }
 
-      // If no encrypted medical card exists, auto-generate a valid client-side AES medical card for the true resident name!
+      // If not found in database, try localStorage
+      if (!foundPayload && currentName) {
+        const residents = localStorage.getItem("respondaCare_residents");
+        if (residents) {
+          try {
+            const list = JSON.parse(residents);
+            const found = list.find((r: any) =>
+              r.name.toLowerCase() === currentName.toLowerCase() ||
+              r.name.toLowerCase().includes(currentName.toLowerCase())
+            );
+            if (found) {
+              foundPayload = found.encryptedPayload;
+              if (found.id) {
+                setPatientId(found.id);
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // If still no payload, auto-generate it
       if (!foundPayload) {
         const defaultRaw = {
-          name: currentName,
+          name: currentName || "Pedro Penduko",
           age: 34,
           gender: "Male",
           barangay: "Brgy. 45, Pasay City",
+          bloodType: "O+",
+          chronic: "Type 1 Diabetes",
+          surgeries: "Appendectomy 2019",
+          smoke: "Non-smoker",
+          allergies: {
+            drug: "Penicillin",
+            food: "Peanuts",
+            environmental: ""
+          },
+          medications: [
+            { name: "Humalog KwikPen", dose: "As needed based on BG levels", freq: "As needed" },
+            { name: "Lisinopril", dose: "10mg Tablet - Once daily", freq: "Daily" }
+          ],
+          vitals: {
+            bp: "120/80",
+            hr: "72",
+            weight: "70",
+            height: "165",
+            bgLevel: "98"
+          },
+          notes: "Suspected hypoglycemic shock",
           sample: {
             s: "Type 1 Diabetes, Lisinopril medication",
             a: "Penicillin, Peanuts",
@@ -65,14 +136,93 @@ export default function PatientDashboardPage() {
           }
         };
 
-        import("../../lib/cryptoUtils").then(async ({ encryptPayload }) => {
-          const payload = await encryptPayload(defaultRaw, "barangay45key");
-          setQrPayload(payload);
-          const list = [{ name: currentName, barangay: "Brgy. 45, Pasay City", encryptedPayload: payload }];
-          localStorage.setItem("respondaCare_residents", JSON.stringify(list));
-        });
+        const { encryptPayload } = await import("../../lib/cryptoUtils");
+        foundPayload = await encryptPayload(defaultRaw, "barangay45key");
+        
+        const randomId = `RC-${Math.floor(1000 + Math.random() * 9000)}`;
+        setPatientId(randomId);
+
+        // Save to localStorage under respondaCare_residents
+        const cached = localStorage.getItem("respondaCare_residents") || "[]";
+        const list = JSON.parse(cached);
+        const record = {
+          id: randomId,
+          name: currentName,
+          barangay: "Brgy. 45, Pasay City",
+          encryptedPayload: foundPayload,
+          dob: "1992-04-12",
+          gender: "Male",
+          contact: "+63 917 123 4567",
+          address: "Zone 3, Barangay 45, Pasay City",
+          bloodType: "O+",
+          vulnerability: "High",
+          lastUpdated: new Date().toISOString().slice(0, 10),
+        };
+        list.push(record);
+        localStorage.setItem("respondaCare_residents", JSON.stringify(list));
       }
-    }
+
+      // If we are authenticated but not synced in Supabase, perform database insertion
+      if (authData?.user && !isSyncedInSupabase) {
+        try {
+          const { data: newRes, error: insertError } = await supabase
+            .schema("core")
+            .from("residents")
+            .insert({
+              user_id: authData.user.id,
+              barangay_id: 1, // default barangay ID 1
+              address: "Zone 3, Barangay 45, Pasay City",
+              date_of_birth: "1992-04-12",
+              gender: "Male",
+              contact_number: "+63 917 123 4567",
+              mobility_status: "High",
+              consent_given: true,
+              consent_granted: true,
+              encrypted_payload: foundPayload
+            })
+            .select()
+            .single();
+
+          if (insertError) {
+            console.error("Error inserting core.residents:", insertError);
+          }
+
+          if (newRes) {
+            if (newRes.resident_id) {
+              setPatientId("RC-" + newRes.resident_id.substring(0, 6).toUpperCase());
+            }
+            // Also create initial health record
+            const { error: recordError } = await supabase
+              .schema("health")
+              .from("records")
+              .insert({
+                resident_id: newRes.resident_id,
+                encrypted_vitals: foundPayload,
+                record_type: "initial"
+              });
+            
+            if (recordError) {
+              console.error("Error inserting health.records:", recordError);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to automatically initialize database resident record:", e);
+        }
+      }
+
+      // 4. Decrypt and set state
+      if (foundPayload) {
+        setQrPayload(foundPayload);
+        const { decryptPayload } = await import("../../lib/cryptoUtils");
+        try {
+          const decrypted = await decryptPayload(foundPayload, "barangay45key");
+          setDecryptedProfile(decrypted);
+        } catch (err) {
+          console.error("Failed to decrypt profile", err);
+        }
+      }
+    };
+    loadUser();
   }, []);
 
   const handleDownloadPdf = () => {
@@ -109,7 +259,7 @@ export default function PatientDashboardPage() {
     doc.setTextColor(100, 110, 120);
     doc.setFontSize(7);
     doc.setFont("helvetica", "normal");
-    doc.text("Verify Secure ID: RC-8829-X", 50, 100, { align: "center" });
+    doc.text(`Verify Secure ID: ${patientId}`, 50, 100, { align: "center" });
     doc.text("Barangay 45, Pasay City", 50, 105, { align: "center" });
 
     // Compliance text
@@ -124,6 +274,14 @@ export default function PatientDashboardPage() {
     doc.save(`RespondaCare_ID_${patientName.replace(/\s+/g, "_")}.pdf`);
   };
 
+  // Helper to format allergies
+  const getAllergiesString = () => {
+    if (!decryptedProfile) return "None on record";
+    const { drug, food, environmental } = decryptedProfile.allergies || {};
+    const items = [drug, food, environmental].filter(Boolean);
+    return items.join(", ") || "None on record";
+  };
+
   return (
     <div ref={ref} className="bg-[#0f1115] min-h-full pb-12 text-white">
       {/* Top Header */}
@@ -135,7 +293,7 @@ export default function PatientDashboardPage() {
         <div className="flex items-center gap-3 bg-[#1a1d23] px-4 py-2 rounded-full border border-gray-800">
           <div className="text-right">
             <p className="text-sm font-bold text-white leading-tight">{patientName}</p>
-            <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: RC-8829-X</p>
+            <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
           </div>
           <div className="relative">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
@@ -172,9 +330,9 @@ export default function PatientDashboardPage() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
               {[
-                { label: "Blood Type",         value: "O-Positive" },
-                { label: "Allergies",          value: "Penicillin, Peanuts" },
-                { label: "Chronic Conditions", value: "Type 1 Diabetes" },
+                { label: "Blood Type",         value: decryptedProfile?.bloodType || "O+" },
+                { label: "Allergies",          value: getAllergiesString() },
+                { label: "Chronic Conditions", value: decryptedProfile?.chronic || "None on record" },
               ].map((s) => (
                 <div key={s.label} className="bg-gray-800/30 p-5 rounded-2xl border border-gray-700/50">
                   <p className="text-[10px] font-bold text-[#9ca3af] tracking-widest uppercase mb-1">{s.label}</p>
@@ -190,10 +348,10 @@ export default function PatientDashboardPage() {
                 <p className="text-[10px] font-bold text-[#8b1a1a] tracking-widest uppercase">Active Medications</p>
               </div>
               <div className="space-y-3">
-                {[
-                  { name: "Humalog KwikPen", dose: "As needed based on BG levels" },
-                  { name: "Lisinopril",       dose: "10mg Tablet - Once daily" },
-                ].map((med) => (
+                {(decryptedProfile?.medications || [
+                  { name: "Humalog KwikPen", dose: "As needed based on BG levels", freq: "As needed" },
+                  { name: "Lisinopril",       dose: "10mg Tablet - Once daily", freq: "Daily" },
+                ]).map((med: any) => (
                   <div key={med.name} className="flex items-center justify-between p-4 bg-[#0f1115]/40 rounded-2xl border border-gray-800">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-[#8b1a1a]/20 rounded-full flex items-center justify-center">
@@ -204,7 +362,7 @@ export default function PatientDashboardPage() {
                         <p className="text-xs text-[#9ca3af]">{med.dose}</p>
                       </div>
                     </div>
-                    <span className="px-3 py-1 bg-green-500/10 text-green-500 text-[10px] font-bold uppercase rounded-full border border-green-500/20">Daily</span>
+                    <span className="px-3 py-1 bg-green-500/10 text-green-500 text-[10px] font-bold uppercase rounded-full border border-green-500/20">{med.freq || "Daily"}</span>
                   </div>
                 ))}
               </div>
@@ -237,7 +395,7 @@ export default function PatientDashboardPage() {
                 )}
                 
                 <p className="text-[9px] font-mono font-bold text-gray-400 tracking-widest uppercase mt-2">
-                  Verify Secure ID: RC-8829-X
+                  Verify Secure ID: {patientId}
                 </p>
               </div>
             </div>

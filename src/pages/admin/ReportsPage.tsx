@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -18,13 +18,13 @@ const responseTime = [
   { day: "Mon", time: 5.2 }, { day: "Tue", time: 4.8 }, { day: "Wed", time: 6.1 },
   { day: "Thu", time: 4.3 }, { day: "Fri", time: 5.7 }, { day: "Sat", time: 3.9 }, { day: "Sun", time: 4.2 },
 ];
-const incidentTypes = [
+const defaultIncidentTypes = [
   { name: "Medical", value: 42 }, { name: "Accident", value: 28 }, { name: "Fire", value: 12 },
   { name: "Violence", value: 10 }, { name: "Other", value: 8 },
 ];
 const COLORS = ["#e53e3e", "#ed8936", "#ecc94b", "#4299e1", "#718096"];
 
-const resolvedByZone = [
+const defaultResolvedByZone = [
   { zone: "Zone 1", resolved: 18, pending: 5 }, { zone: "Zone 2", resolved: 22, pending: 3 },
   { zone: "Zone 3", resolved: 15, pending: 8 }, { zone: "Zone 4", resolved: 12, pending: 2 },
   { zone: "Zone 5", resolved: 9,  pending: 4 },
@@ -34,6 +34,116 @@ const tooltipStyle = { backgroundColor: "#1a1d23", border: "1px solid #2d333b", 
 
 export default function ReportsPage() {
   const ref = useRef<HTMLDivElement>(null);
+
+  // Dynamic stats state
+  const [stats, setStats] = useState({
+    totalIncidents: 241,
+    resolutionRate: 89,
+    avgResponseTime: 4.2,
+    residentsEnrolled: 2405
+  });
+
+  const [pieData, setPieData] = useState(defaultIncidentTypes);
+  const [zoneData, setZoneData] = useState(defaultResolvedByZone);
+
+  useEffect(() => {
+    // 1. Enrolled residents
+    const cachedResidents = localStorage.getItem("respondaCare_residents");
+    let residentsCount = 2405;
+    if (cachedResidents) {
+      try {
+        const parsed = JSON.parse(cachedResidents);
+        residentsCount = 2400 + parsed.length; // offset by default number
+      } catch (e) {}
+    }
+
+    // 2. Incidents & Handovers
+    const cachedIncidents = localStorage.getItem("respondaCare_incidents");
+    const cachedHandovers = localStorage.getItem("respondaCare_handovers");
+    
+    let localIncidents = [];
+    let localHandovers = [];
+    
+    if (cachedIncidents) {
+      try { localIncidents = JSON.parse(cachedIncidents); } catch(e){}
+    }
+    if (cachedHandovers) {
+      try { localHandovers = JSON.parse(cachedHandovers); } catch(e){}
+    }
+
+    // Calculations
+    const totalLocalInc = localIncidents.length;
+    const resolvedLocal = localIncidents.filter((i: any) => i.status === "Resolved").length + localHandovers.length;
+
+    const baseIncidents = 241;
+    const computedTotalIncidents = baseIncidents + totalLocalInc;
+    
+    const baseResolved = Math.round(baseIncidents * 0.89);
+    const computedResolved = baseResolved + resolvedLocal;
+    const computedRate = Math.min(100, Math.round((computedResolved / computedTotalIncidents) * 100)) || 89;
+
+    setStats({
+      totalIncidents: computedTotalIncidents,
+      resolutionRate: computedRate,
+      avgResponseTime: 4.2,
+      residentsEnrolled: residentsCount
+    });
+
+    // Pie chart update (Merge local categories)
+    const categoryCounts: Record<string, number> = {
+      "Medical": 42,
+      "Accident": 28,
+      "Fire": 12,
+      "Violence": 10,
+      "Other": 8
+    };
+
+    localIncidents.forEach((inc: any) => {
+      const cat = inc.category || "Medical";
+      if (categoryCounts[cat] !== undefined) {
+        categoryCounts[cat] += 1;
+      } else {
+        categoryCounts["Other"] += 1;
+      }
+    });
+
+    const updatedPie = Object.keys(categoryCounts).map(name => ({
+      name,
+      value: categoryCounts[name]
+    }));
+    setPieData(updatedPie);
+
+    // Zone Data update
+    const zoneCounts: Record<string, { resolved: number, pending: number }> = {
+      "Zone 1": { resolved: 18, pending: 5 },
+      "Zone 2": { resolved: 22, pending: 3 },
+      "Zone 3": { resolved: 15, pending: 8 },
+      "Zone 4": { resolved: 12, pending: 2 },
+      "Zone 5": { resolved: 9,  pending: 4 }
+    };
+
+    localIncidents.forEach((inc: any) => {
+      const zoneName = inc.barangay && inc.barangay.includes("Zone") 
+        ? inc.barangay.substring(inc.barangay.indexOf("Zone"), inc.barangay.indexOf("Zone") + 6) 
+        : "Zone 3";
+      
+      const targetZone = zoneCounts[zoneName] || zoneCounts["Zone 3"];
+      if (inc.status === "Resolved") {
+        targetZone.resolved += 1;
+      } else {
+        targetZone.pending += 1;
+      }
+    });
+
+    const updatedZones = Object.keys(zoneCounts).map(zone => ({
+      zone,
+      resolved: zoneCounts[zone].resolved,
+      pending: zoneCounts[zone].pending
+    }));
+    setZoneData(updatedZones);
+
+  }, []);
+
   useEffect(() => {
     const ctx = gsap.context(() => {
       gsap.fromTo("[data-animate]", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, stagger: 0.07, ease: "power2.out" });
@@ -55,10 +165,10 @@ export default function ReportsPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
-          <StatCard label="Total Incidents (30d)" value={241}   iconBg="bg-red-900/30"    icon={<AlertTriangle className="w-6 h-6 text-[#e53e3e]" />} trend="↑ +18%" trendColor="red" />
-          <StatCard label="Resolution Rate"       value={89}    iconBg="bg-green-900/30"  icon={<UserCheck className="w-6 h-6 text-[#48bb78]" />}      trend="↑ +4%" trendColor="green" suffix="%" />
-          <StatCard label="Avg. Response (min)"   value={4.2}   iconBg="bg-blue-900/30"   icon={<Timer className="w-6 h-6 text-[#4299e1]" />}          trend="↓ -12s" trendColor="green" suffix="m" />
-          <StatCard label="Residents Enrolled"    value={2405}  iconBg="bg-orange-900/30" icon={<TrendingUp className="w-6 h-6 text-[#ed8936]" />}      trend="↑ +3.2%" trendColor="green" />
+          <StatCard label="Total Incidents (30d)" value={stats.totalIncidents}   iconBg="bg-red-900/30"    icon={<AlertTriangle className="w-6 h-6 text-[#e53e3e]" />} trend="↑ +18%" trendColor="red" />
+          <StatCard label="Resolution Rate"       value={stats.resolutionRate}    iconBg="bg-green-900/30"  icon={<UserCheck className="w-6 h-6 text-[#48bb78]" />}      trend="↑ +4%" trendColor="green" suffix="%" />
+          <StatCard label="Avg. Response (min)"   value={stats.avgResponseTime}   iconBg="bg-blue-900/30"   icon={<Timer className="w-6 h-6 text-[#4299e1]" />}          trend="↓ -12s" trendColor="green" suffix="m" />
+          <StatCard label="Residents Enrolled"    value={stats.residentsEnrolled}  iconBg="bg-orange-900/30" icon={<TrendingUp className="w-6 h-6 text-[#ed8936]" />}      trend="↑ +3.2%" trendColor="green" />
         </div>
 
         {/* Charts row 1 */}
@@ -90,8 +200,8 @@ export default function ReportsPage() {
             <p className="text-xs text-[#8b949e] mb-4">Distribution by category</p>
             <ResponsiveContainer width="100%" height={180}>
               <PieChart>
-                <Pie data={incidentTypes} cx="50%" cy="50%" outerRadius={70} dataKey="value" label={(p) => `${p.name ?? ''} ${(((p.percent ?? 0)) * 100).toFixed(0)}%`} labelLine={false} fontSize={9}>
-                  {incidentTypes.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                <Pie data={pieData} cx="50%" cy="50%" outerRadius={70} dataKey="value" label={(p) => `${p.name ?? ''} ${(((p.percent ?? 0)) * 100).toFixed(0)}%`} labelLine={false} fontSize={9}>
+                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip contentStyle={tooltipStyle} />
               </PieChart>
@@ -121,7 +231,7 @@ export default function ReportsPage() {
             <h3 className="font-bold text-white mb-1">Resolved vs. Pending by Zone</h3>
             <p className="text-xs text-[#8b949e] mb-5">Incident resolution status per zone</p>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={resolvedByZone}>
+              <BarChart data={zoneData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#2d333b" />
                 <XAxis dataKey="zone" tick={{ fill: "#8b949e", fontSize: 11 }} />
                 <YAxis tick={{ fill: "#8b949e", fontSize: 11 }} />

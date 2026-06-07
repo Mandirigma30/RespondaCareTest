@@ -59,14 +59,63 @@ export default function QRScanPage() {
     return () => ctx.revert();
   }, []);
 
-  // Fetch registered residents database from local cache
+  // Fetch registered residents database from local cache and database
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const cached = localStorage.getItem("respondaCare_residents");
-      if (cached) {
-        setLocalResidents(JSON.parse(cached));
+    const fetchResidents = async () => {
+      let residentsList: any[] = [];
+      
+      // 1. Fetch from database (live residents)
+      try {
+        const { data, error } = await supabase
+          .schema("core")
+          .from("residents")
+          .select(`
+            resident_id,
+            encrypted_payload,
+            barangays: barangay_id (barangay_name),
+            users: user_id (full_name)
+          `)
+          .is("is_anonymized", false);
+          
+        if (!error && data) {
+          residentsList = data
+            .filter(r => r.encrypted_payload)
+            .map(r => {
+              const uObj = Array.isArray(r.users) ? r.users[0] : r.users;
+              const bObj = Array.isArray(r.barangays) ? r.barangays[0] : r.barangays;
+              return {
+                id: "RC-" + r.resident_id.substring(0, 6).toUpperCase(),
+                name: (uObj as any)?.full_name || "Unknown Resident",
+                barangay: (bObj as any)?.barangay_name || "Zone 1",
+                encryptedPayload: r.encrypted_payload
+              };
+            });
+        }
+      } catch (err) {
+        console.error("Failed to load live residents:", err);
       }
-    }
+
+      // 2. Load from localStorage cache (fallback)
+      if (typeof window !== "undefined") {
+        const cached = localStorage.getItem("respondaCare_residents");
+        if (cached) {
+          try {
+            const cachedList = JSON.parse(cached);
+            const combined = [...residentsList];
+            cachedList.forEach((cr: any) => {
+              if (!combined.some(r => r.name.toLowerCase() === cr.name.toLowerCase())) {
+                combined.push(cr);
+              }
+            });
+            residentsList = combined;
+          } catch (e) {}
+        }
+      }
+
+      setLocalResidents(residentsList);
+    };
+
+    fetchResidents();
   }, []);
 
   async function startCamera() {
@@ -156,7 +205,7 @@ export default function QRScanPage() {
           setScanned(true);
 
           if (!isPlaceholderUrl) {
-            await supabase.from("security.audit_log").insert({
+            await supabase.schema("security").from("audit_log").insert({
               action: "DECRYPT_LOOKUP",
               target_table: "health.records",
               details: { info: `First Responder successfully scanned and decrypted health profile for ${decrypted.name}` }
@@ -187,7 +236,8 @@ export default function QRScanPage() {
       // 3. Query live Supabase schemas
       if (!isPlaceholderUrl) {
         const { data: resData } = await supabase
-          .from("core.residents")
+          .schema("core")
+          .from("residents")
           .select("encrypted_payload, resident_id")
           .or(`resident_id.eq.${scannedText},contact_number.eq.${scannedText}`)
           .maybeSingle();
@@ -204,7 +254,7 @@ export default function QRScanPage() {
           });
           setScanned(true);
 
-          await supabase.from("security.audit_log").insert({
+          await supabase.schema("security").from("audit_log").insert({
             action: "DECRYPT_LOOKUP_DB",
             target_table: "core.residents",
             target_id: resData.resident_id,

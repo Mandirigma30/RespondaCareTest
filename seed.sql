@@ -1,6 +1,7 @@
 -- ============================================================
 --  RespondaCare — Complete Database Schema (Idempotent)
---  Version: 1.0.1
+--  Version: 1.1.3-supabase
+--  Ported from: SQL Server v1.1.3
 --  Compliance: RA 10173 (Philippine Data Privacy Act)
 --  Author: RespondaCare Engineering Team
 -- ============================================================
@@ -32,31 +33,33 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ── security.roles ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS security.roles (
     role_id   INTEGER PRIMARY KEY,
-    role_name TEXT NOT NULL UNIQUE CHECK (role_name IN ('admin', 'bhw', 'responder', 'patient', 'dispatcher'))
+    -- Names match original SQL Server v1.1.3 (lowercased for PostgreSQL convention)
+    role_name TEXT NOT NULL UNIQUE CHECK (role_name IN ('admin', 'bhw', 'resident', 'first_responder', 'dispatcher'))
 );
 
 INSERT INTO security.roles (role_id, role_name) OVERRIDING SYSTEM VALUE VALUES
   (1, 'admin'),
   (2, 'bhw'),
-  (3, 'patient'),
-  (4, 'responder'),
+  (3, 'resident'),
+  (4, 'first_responder'),
   (5, 'dispatcher')
 ON CONFLICT (role_id) DO UPDATE SET role_name = EXCLUDED.role_name;
 
 -- ── security.users ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS security.users (
     user_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    auth_uid       UUID UNIQUE,                       -- matches auth.users.id
-    role_id        INTEGER REFERENCES security.roles(role_id),
+    auth_uid       UUID UNIQUE,                       -- matches auth.users.id (Supabase Auth bridge)
+    role_id        INTEGER NOT NULL REFERENCES security.roles(role_id),
     barangay_id    INTEGER,
-    full_name      TEXT,
+    full_name      TEXT NOT NULL,
     email          TEXT UNIQUE NOT NULL,
-    phone          TEXT,
+    phone          TEXT,                              -- maps to original ContactNumber
     is_active      BOOLEAN DEFAULT TRUE,
-    totp_secret    TEXT,                              -- TOTP secret (server-encrypted)
-    password_hash  TEXT,                              -- credentials fallback
-    created_at     TIMESTAMPTZ DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ DEFAULT NOW()
+    is_deleted     BOOLEAN DEFAULT FALSE,             -- soft-delete (matches original IsDeleted)
+    mfa_secret     TEXT,                              -- TOTP/MFA secret (matches original MfaSecret)
+    password_hash  TEXT NOT NULL,                     -- credentials fallback
+    created_at     TIMESTAMPTZ DEFAULT NOW(),         -- matches original CreatedAt
+    updated_at     TIMESTAMPTZ DEFAULT NOW()          -- matches original ModifiedAt
 );
 
 ALTER TABLE security.users ENABLE ROW LEVEL SECURITY;
@@ -127,7 +130,8 @@ BEGIN
   VALUES (
     TG_OP,
     TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
-    COALESCE(NEW.user_id, OLD.user_id, TG_TABLE_NAME::text || '-id-placeholder'::text),
+    -- target_id is nullable UUID; full record is captured in details JSONB
+    NULL::uuid,
     row_to_json(COALESCE(NEW, OLD))::jsonb
   );
   RETURN COALESCE(NEW, OLD);
@@ -180,25 +184,25 @@ ON CONFLICT (barangay_id) DO UPDATE SET barangay_name = EXCLUDED.barangay_name;
 
 -- ── core.residents ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS core.residents (
-    resident_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id           UUID REFERENCES security.users(user_id) ON DELETE SET NULL,
-    barangay_id       INTEGER REFERENCES core.barangays(barangay_id),
-    address           TEXT,
-    date_of_birth     DATE,
-    gender            TEXT,
-    contact_number    TEXT,
-    household_type    TEXT,
-    mobility_status   TEXT,
-    next_of_kin_name  TEXT,
+    resident_id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id                  UUID UNIQUE NOT NULL REFERENCES security.users(user_id) ON DELETE SET NULL,
+    barangay_id              INTEGER NOT NULL REFERENCES core.barangays(barangay_id),
+    address                  TEXT NOT NULL,
+    date_of_birth            DATE NOT NULL,
+    gender                   TEXT,
+    contact_number           TEXT,
+    household_type           TEXT CHECK (household_type IN ('Family', 'Shared', 'Alone')),
+    mobility_status          TEXT DEFAULT 'Mobile',
+    next_of_kin_name         TEXT,
     next_of_kin_relationship TEXT,
     next_of_kin_contact_number TEXT,
-    consent_given     BOOLEAN DEFAULT FALSE,
-    enrolled_by       UUID REFERENCES security.users(user_id),
-    encrypted_payload TEXT,                    -- AES-256-GCM encrypted backup payload
-    is_anonymized     BOOLEAN DEFAULT FALSE,
-    consent_granted   BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at        TIMESTAMPTZ DEFAULT NOW(),
-    updated_at        TIMESTAMPTZ DEFAULT NOW()
+    consent_given            BOOLEAN DEFAULT FALSE,
+    enrolled_by              UUID REFERENCES security.users(user_id),
+    encrypted_payload        TEXT,             -- AES-256-GCM client-side encrypted QR payload
+    is_anonymized            BOOLEAN DEFAULT FALSE,
+    consent_granted          BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at               TIMESTAMPTZ DEFAULT NOW(),  -- matches original EnrolledAt
+    updated_at               TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE core.residents ENABLE ROW LEVEL SECURITY;
@@ -386,25 +390,43 @@ CREATE POLICY medications_medical ON health.medications
 -- Incident reports, dispatch, UIR / handover records
 -- ============================================================
 
+-- ── emergency.incident_types ────────────────────────────────
+-- Matches original Emergency.IncidentTypes lookup table
+CREATE TABLE IF NOT EXISTS emergency.incident_types (
+    type_id   SERIAL PRIMARY KEY,
+    type_name TEXT NOT NULL UNIQUE
+);
+
+INSERT INTO emergency.incident_types (type_name) VALUES
+  ('Medical'), ('Fire'), ('Trauma'), ('OB/GYNE'), ('Respiratory')
+ON CONFLICT (type_name) DO NOTHING;
+
+ALTER TABLE emergency.incident_types ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS incident_types_read ON emergency.incident_types;
+CREATE POLICY incident_types_read ON emergency.incident_types FOR SELECT TO authenticated USING (true);
+
 -- ── emergency.incidents ─────────────────────────────────────
+-- Matches original Emergency.Incidents
 CREATE TABLE IF NOT EXISTS emergency.incidents (
-    incident_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    reported_by      UUID REFERENCES security.users(user_id),
-    assigned_to      UUID REFERENCES security.users(user_id),
-    resident_id      UUID REFERENCES core.residents(resident_id),
-    status           TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active','Dispatched','On-Scene','Resolved','Cancelled')),
-    latitude         DOUBLE PRECISION,
-    longitude        DOUBLE PRECISION,
-    address          TEXT,
-    barangay_id      INTEGER REFERENCES core.barangays(barangay_id),
-    nature_of_call   TEXT,
-    severity_score   INTEGER CHECK (severity_score BETWEEN 1 AND 5),
-    incident_date    DATE DEFAULT CURRENT_DATE,
-    dispatch_time    TIMESTAMPTZ,
-    arrival_time     TIMESTAMPTZ,
-    clear_time       TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ DEFAULT NOW()
+    incident_id    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    resident_id    UUID NOT NULL REFERENCES core.residents(resident_id),
+    reported_by    UUID NOT NULL REFERENCES security.users(user_id),
+    assigned_to    UUID REFERENCES security.users(user_id),
+    type_id        INTEGER REFERENCES emergency.incident_types(type_id), -- matches original TypeID FK
+    severity_score INTEGER CHECK (severity_score BETWEEN 1 AND 5),
+    status         TEXT NOT NULL DEFAULT 'Pending'
+                   CHECK (status IN ('Pending','Active','Dispatched','On-Scene','Resolved','Cancelled')),
+    latitude       DOUBLE PRECISION,
+    longitude      DOUBLE PRECISION,
+    address        TEXT,
+    barangay_id    INTEGER REFERENCES core.barangays(barangay_id),
+    nature_of_call TEXT,
+    incident_date  DATE DEFAULT CURRENT_DATE,
+    dispatch_time  TIMESTAMPTZ,
+    arrival_time   TIMESTAMPTZ,
+    clear_time     TIMESTAMPTZ,           -- matches original ResolvedAt
+    created_at     TIMESTAMPTZ DEFAULT NOW(),  -- matches original ReportedAt
+    updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE emergency.incidents ENABLE ROW LEVEL SECURITY;
@@ -430,36 +452,78 @@ CREATE TRIGGER incidents_audit
   AFTER INSERT OR UPDATE OR DELETE ON emergency.incidents
   FOR EACH ROW EXECUTE FUNCTION security.log_audit();
 
--- ── emergency.handovers (UIR) ───────────────────────────────
-CREATE TABLE IF NOT EXISTS emergency.handovers (
-    handover_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    incident_id          UUID REFERENCES emergency.incidents(incident_id) ON DELETE CASCADE,
-    responder_id         UUID REFERENCES security.users(user_id),
-    patient_name         TEXT,                  -- Duplicate for quick reference (non-PHI)
-    encrypted_vitals     TEXT,                  -- AES-256-GCM encrypted UIR vitals
-    receiving_hospital   TEXT,
-    receiving_provider   TEXT,
-    transport_mode       TEXT DEFAULT 'Ambulance',
-    departure_time       TIMESTAMPTZ,
-    arrival_at_facility  TIMESTAMPTZ,
-    gcs_total            INTEGER,
-    severity_score       INTEGER,
-    response_outcome     TEXT,
-    turnover_notes       TEXT,
-    pdf_generated        BOOLEAN DEFAULT FALSE,
-    created_at           TIMESTAMPTZ DEFAULT NOW()
+-- ── emergency.patient_care_reports ─────────────────────────
+-- Matches original Emergency.PatientCareReports
+-- Renamed from 'handovers' to align with original schema intent
+CREATE TABLE IF NOT EXISTS emergency.patient_care_reports (
+    report_id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    incident_id            UUID NOT NULL UNIQUE REFERENCES emergency.incidents(incident_id) ON DELETE CASCADE,
+    resident_id            UUID NOT NULL REFERENCES core.residents(resident_id),
+    reported_by            UUID NOT NULL REFERENCES security.users(user_id),
+    -- ABCD Assessment (matches original)
+    c_spine_status         TEXT,
+    airway_status          TEXT,
+    breathing_status       TEXT,
+    circulation_pulse      TEXT,
+    skin_condition         TEXT,
+    capillary_refill       TEXT,
+    -- Patient Info
+    level_of_consciousness TEXT,
+    chief_complaint        TEXT,
+    mechanism_of_injury    TEXT,
+    burn_percentage        DECIMAL(5,2),
+    -- Interventions
+    interventions_performed TEXT,
+    narrative_notes         TEXT,              -- matches original NarrativeNotes
+    -- Outcomes (matches original CHECK constraints)
+    response_outcome        TEXT NOT NULL CHECK (response_outcome IN ('Successful','Partially Successful','Failed')),
+    patient_disposition     TEXT NOT NULL CHECK (patient_disposition IN ('Treated On-Scene','Transported to Hospital','Deceased','Refused Transport')),
+    -- Disposition
+    hospital_name           TEXT,             -- matches original HospitalName
+    receiving_provider      TEXT,
+    transport_mode          TEXT DEFAULT 'Ambulance',
+    departure_time          TIMESTAMPTZ,
+    arrival_at_facility     TIMESTAMPTZ,
+    -- Additional Supabase fields
+    gcs_total               INTEGER,
+    severity_score          INTEGER,
+    turnover_notes          TEXT,
+    pdf_generated           BOOLEAN DEFAULT FALSE,
+    submitted_at            TIMESTAMPTZ DEFAULT NOW()  -- matches original SubmittedAt
 );
 
-ALTER TABLE emergency.handovers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE emergency.patient_care_reports ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS handovers_medical ON emergency.handovers;
-CREATE POLICY handovers_medical ON emergency.handovers
+DROP POLICY IF EXISTS pcr_medical ON emergency.patient_care_reports;
+CREATE POLICY pcr_medical ON emergency.patient_care_reports
   FOR ALL USING (
     EXISTS (
       SELECT 1 FROM security.users u
       WHERE u.auth_uid = auth.uid() AND u.role_id IN (1, 2, 4)
     )
   );
+
+-- Backward-compatible view: 'handovers' still accessible for existing app code
+CREATE OR REPLACE VIEW emergency.handovers AS
+  SELECT
+    report_id          AS handover_id,
+    incident_id,
+    reported_by        AS responder_id,
+    resident_id,
+    NULL::TEXT         AS patient_name,
+    NULL::TEXT         AS encrypted_vitals,
+    hospital_name      AS receiving_hospital,
+    receiving_provider,
+    transport_mode,
+    departure_time,
+    arrival_at_facility,
+    gcs_total,
+    severity_score,
+    response_outcome,
+    turnover_notes,
+    pdf_generated,
+    submitted_at       AS created_at
+  FROM emergency.patient_care_reports;
 
 -- ── emergency.offline_queue ─────────────────────────────────
 -- Fallback table for syncing reports queued during offline mode.
@@ -480,6 +544,33 @@ DROP POLICY IF EXISTS offline_queue_self ON emergency.offline_queue;
 CREATE POLICY offline_queue_self ON emergency.offline_queue
   FOR ALL USING (
     user_id IN (SELECT user_id FROM security.users WHERE auth_uid = auth.uid())
+  );
+
+-- ── emergency.vital_signs ──────────────────────────────────
+-- Matches original Emergency.VitalSigns (restored from original schema)
+CREATE TABLE IF NOT EXISTS emergency.vital_signs (
+    vital_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    report_id         UUID NOT NULL REFERENCES emergency.patient_care_reports(report_id) ON DELETE CASCADE,
+    observation_time  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    pulse_rate        INTEGER,
+    respiratory_rate  INTEGER,
+    blood_pressure    TEXT,
+    spo2              INTEGER,
+    temperature       DECIMAL(4,1),
+    blood_glucose     TEXT,
+    gcs_total         INTEGER,
+    pain_score        INTEGER CHECK (pain_score BETWEEN 0 AND 10)
+);
+
+ALTER TABLE emergency.vital_signs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS vital_signs_medical ON emergency.vital_signs;
+CREATE POLICY vital_signs_medical ON emergency.vital_signs
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM security.users u
+      WHERE u.auth_uid = auth.uid() AND u.role_id IN (1, 2, 4)
+    )
   );
 
 -- ============================================================
@@ -610,6 +701,13 @@ BEGIN
 END;
 $$;
 
+-- Bind the trigger to auth.users (Supabase auth table)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION security.handle_new_user();
+
+
 -- ============================================================
 -- SEED DATA (Demo / Testing)
 -- ============================================================
@@ -628,9 +726,17 @@ INSERT INTO security.users (user_id, email, full_name, role_id, password_hash) V
   ('22222222-2222-2222-2222-222222222222', 'responder@respondacare.ph', 'First Responder', 4, 'responder123')
 ON CONFLICT (email) DO NOTHING;
 
--- Seed core.residents
-INSERT INTO core.residents (resident_id, user_id, barangay_id, address, date_of_birth, gender, contact_number, nok_name, nok_relationship, nok_contact, consent_given, consent_granted) VALUES
-  ('11111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 1, 'Zone 3, Barangay 45, Pasay City', '1990-01-01', 'Male', '09171234567', 'Maria Dela Cruz', 'Spouse', '09187654321', TRUE, TRUE)
+-- Seed core.residents (using correct column names matching schema)
+INSERT INTO core.residents (
+  resident_id, user_id, barangay_id, address, date_of_birth, gender,
+  contact_number, next_of_kin_name, next_of_kin_relationship,
+  next_of_kin_contact_number, consent_given, consent_granted
+) VALUES (
+  '11111111-1111-1111-1111-111111111111',
+  '11111111-1111-1111-1111-111111111111',
+  1, 'Zone 3, Barangay 45, Pasay City', '1990-01-01', 'Male',
+  '09171234567', 'Maria Dela Cruz', 'Spouse', '09187654321', TRUE, TRUE
+)
 ON CONFLICT DO NOTHING;
 
 -- Seed health.profiles
@@ -654,12 +760,16 @@ GRANT USAGE ON SCHEMA core       TO authenticated, anon;
 GRANT USAGE ON SCHEMA health     TO authenticated;
 GRANT USAGE ON SCHEMA emergency  TO authenticated;
 
-GRANT SELECT, INSERT, UPDATE ON security.audit_log     TO authenticated;
-GRANT SELECT, INSERT ON emergency.incidents             TO authenticated;
-GRANT SELECT, INSERT ON emergency.offline_queue         TO authenticated;
-GRANT SELECT ON core.barangays                          TO authenticated, anon;
-GRANT SELECT ON security.roles                          TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON security.audit_log              TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON emergency.incidents             TO authenticated;
+GRANT SELECT, INSERT ON emergency.patient_care_reports          TO authenticated;
+GRANT SELECT, INSERT ON emergency.vital_signs                   TO authenticated;
+GRANT SELECT ON emergency.incident_types                        TO authenticated;
+GRANT SELECT, INSERT ON emergency.offline_queue                 TO authenticated;
+GRANT SELECT ON core.barangays                                  TO authenticated, anon;
+GRANT SELECT ON security.roles                                  TO authenticated;
 
 -- ============================================================
--- END OF RespondaCare Schema
+-- END OF RespondaCare Schema (v1.1.3-supabase)
+-- Aligned with original SQL Server v1.1.3
 -- ============================================================

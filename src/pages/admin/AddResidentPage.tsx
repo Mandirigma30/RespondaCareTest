@@ -84,18 +84,34 @@ export default function AddResidentPage() {
       const cached = localStorage.getItem("respondaCare_residents") || "[]";
       const list = JSON.parse(cached);
       const newRecord = {
+        id: `RC-${Math.floor(1000 + Math.random() * 9000)}`,
         name: `${firstName} ${lastName}`,
         barangay: `Brgy. 45, Pasay City (${zone})`,
         encryptedPayload: encrypted,
-        age: calculatedAge,
+        dob: dob,
         gender: gender,
         bloodType: bloodType,
-        contact: phone || "N/A",
+        contact: phone || "+63 917 123 4567",
+        address: address || "Barangay 45, Pasay City",
         vulnerability: vulnerability,
         lastUpdated: new Date().toISOString().slice(0, 10)
       };
       list.push(newRecord);
       localStorage.setItem("respondaCare_residents", JSON.stringify(list));
+
+      // Save to local audit logs
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: "Admin Staff",
+        role: "admin",
+        action: `Registered new resident: ${firstName} ${lastName}`,
+        resource: "core.residents",
+        ip: "127.0.0.1",
+        dotColor: "bg-green-500"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
 
       // Supabase dynamic sync
       if (!isPlaceholderUrl) {
@@ -107,13 +123,15 @@ export default function AddResidentPage() {
 
         // 1. Insert security user (auth mock details)
         const { data: userD, error: userErr } = await supabase
-          .from("security.users")
+          .schema("security")
+          .from("users")
           .insert({
             role_id: 3, // patient/resident
             barangay_id: bId,
             full_name: `${firstName} ${lastName}`,
             email: email.trim().toLowerCase(),
-            phone: phone
+            phone: phone,
+            password_hash: "password123"
           })
           .select()
           .single();
@@ -122,7 +140,8 @@ export default function AddResidentPage() {
 
         // 2. Insert core resident
         const { data: resD, error: resErr } = await supabase
-          .from("core.residents")
+          .schema("core")
+          .from("residents")
           .insert({
             user_id: userD?.user_id || null,
             barangay_id: bId,
@@ -146,7 +165,8 @@ export default function AddResidentPage() {
         // 3. Insert baseline health record
         if (resD) {
           const { error: recordErr } = await supabase
-            .from("health.records")
+            .schema("health")
+            .from("records")
             .insert({
               resident_id: resD.resident_id,
               encrypted_vitals: encrypted,
@@ -155,7 +175,7 @@ export default function AddResidentPage() {
           if (recordErr) console.warn("Failed to create initial health record:", recordErr);
 
           // 4. Log Audit Trail
-          await supabase.from("security.audit_log").insert({
+          await supabase.schema("security").from("audit_log").insert({
             action: "INSERT",
             target_table: "core.residents",
             target_id: resD.resident_id,

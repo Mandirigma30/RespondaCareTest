@@ -55,44 +55,72 @@ export default function EnrollmentPage() {
     return () => ctx.revert();
   }, []);
 
-  // Pre-load from local cache if available
+  // Load profile from Supabase first, fallback to local cache
   useEffect(() => {
-    const session = localStorage.getItem("respondaCare_session");
-    if (session) {
-      try {
-        const parsedSession = JSON.parse(session);
-        const residents = localStorage.getItem("respondaCare_residents");
-        if (residents) {
-          const list = JSON.parse(residents);
-          const found = list.find((r: any) => r.name.toLowerCase() === parsedSession.name?.toLowerCase());
-          if (found && found.encryptedPayload) {
-            import("../../lib/cryptoUtils").then(async ({ decryptPayload }) => {
-              try {
-                const decrypted = (await decryptPayload(found.encryptedPayload, "barangay45key")) as any;
-                if (decrypted) {
-                  setBloodType(decrypted.bloodType || "O+");
-                  setChronic(decrypted.chronic || "");
-                  setSurgeries(decrypted.surgeries || "");
-                  setSmoke(decrypted.smoke || "Non-smoker");
-                  setDrugAllergy(decrypted.allergies?.drug || "");
-                  setFoodAllergy(decrypted.allergies?.food || "");
-                  setEnvAllergy(decrypted.allergies?.environmental || "");
-                  if (decrypted.medications) setMedications(decrypted.medications);
-                  setBp(decrypted.vitals?.bp || "");
-                  setHr(decrypted.vitals?.hr || "");
-                  setWeight(decrypted.vitals?.weight || "");
-                  setHeight(decrypted.vitals?.height || "");
-                  setBgLevel(decrypted.vitals?.bgLevel || "");
-                  setNotes(decrypted.notes || "");
-                }
-              } catch (e) {
-                console.error("Failed to decrypt cached profile", e);
-              }
-            });
-          }
+    const loadProfile = async () => {
+      let encryptedPayload = "";
+
+      // 1. Try fetching from Supabase first
+      const { data: sessionData } = await supabase.auth.getSession();
+      const authUser = sessionData?.session?.user;
+      if (authUser) {
+        const { data: resData } = await supabase
+          .schema("core")
+          .from("residents")
+          .select("encrypted_payload")
+          .eq("user_id", authUser.id)
+          .maybeSingle();
+        if (resData?.encrypted_payload) {
+          encryptedPayload = resData.encrypted_payload;
         }
-      } catch (e) {}
-    }
+      }
+
+      // 2. Fall back to local storage
+      if (!encryptedPayload) {
+        const session = localStorage.getItem("respondaCare_session");
+        if (session) {
+          try {
+            const parsedSession = JSON.parse(session);
+            const residents = localStorage.getItem("respondaCare_residents");
+            if (residents) {
+              const list = JSON.parse(residents);
+              const found = list.find((r: any) => r.name.toLowerCase() === parsedSession.name?.toLowerCase());
+              if (found && found.encryptedPayload) {
+                encryptedPayload = found.encryptedPayload;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 3. Decrypt and set state
+      if (encryptedPayload) {
+        import("../../lib/cryptoUtils").then(async ({ decryptPayload }) => {
+          try {
+            const decrypted = (await decryptPayload(encryptedPayload, "barangay45key")) as any;
+            if (decrypted) {
+              setBloodType(decrypted.bloodType || "O+");
+              setChronic(decrypted.chronic || "");
+              setSurgeries(decrypted.surgeries || "");
+              setSmoke(decrypted.smoke || "Non-smoker");
+              setDrugAllergy(decrypted.allergies?.drug || "");
+              setFoodAllergy(decrypted.allergies?.food || "");
+              setEnvAllergy(decrypted.allergies?.environmental || "");
+              if (decrypted.medications) setMedications(decrypted.medications);
+              setBp(decrypted.vitals?.bp || "");
+              setHr(decrypted.vitals?.hr || "");
+              setWeight(decrypted.vitals?.weight || "");
+              setHeight(decrypted.vitals?.height || "");
+              setBgLevel(decrypted.vitals?.bgLevel || "");
+              setNotes(decrypted.notes || "");
+            }
+          } catch (e) {
+            console.error("Failed to decrypt cached profile", e);
+          }
+        });
+      }
+    };
+    loadProfile();
   }, []);
 
   const handleAddMedication = () => {
@@ -167,15 +195,43 @@ export default function EnrollmentPage() {
       // Save to localStorage under respondaCare_residents
       const cached = localStorage.getItem("respondaCare_residents") || "[]";
       const list = JSON.parse(cached);
-      const existingIdx = list.findIndex((r: any) => r.name.toLowerCase() === patientName.toLowerCase());
-      const record = { name: patientName, barangay: "Brgy. 45, Pasay City", encryptedPayload: encrypted };
+      const existing = list.find((r: any) => r.name.toLowerCase() === patientName.toLowerCase());
       
+      const record = {
+        id: existing?.id || `RC-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: patientName,
+        barangay: "Brgy. 45, Pasay City",
+        encryptedPayload: encrypted,
+        dob: existing?.dob || "1992-04-12",
+        gender: existing?.gender || "Male",
+        contact: existing?.contact || "+63 917 123 4567",
+        address: existing?.address || "Zone 3, Barangay 45, Pasay City",
+        bloodType: bloodType,
+        vulnerability: chronic ? "High" : "Low",
+        lastUpdated: new Date().toISOString().slice(0, 10),
+      };
+      
+      const existingIdx = list.findIndex((r: any) => r.name.toLowerCase() === patientName.toLowerCase());
       if (existingIdx > -1) {
         list[existingIdx] = record;
       } else {
         list.push(record);
       }
       localStorage.setItem("respondaCare_residents", JSON.stringify(list));
+
+      // Save to local audit logs
+      const localLogs = JSON.parse(localStorage.getItem("respondaCare_auditLogs") || "[]");
+      localLogs.unshift({
+        ts: new Date().toISOString().slice(0, 10),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        user: patientName,
+        role: "patient",
+        action: `Resident updated own encrypted medical profile`,
+        resource: "health.records",
+        ip: "127.0.0.1",
+        dotColor: "bg-orange-400"
+      });
+      localStorage.setItem("respondaCare_auditLogs", JSON.stringify(localLogs));
 
       // Sync to live Supabase if available
       if (!isPlaceholderUrl) {
@@ -184,37 +240,68 @@ export default function EnrollmentPage() {
         if (authUser) {
           // Find resident_id in core.residents
           const { data: resData } = await supabase
-            .from("core.residents")
+            .schema("core")
+            .from("residents")
             .select("resident_id")
             .eq("user_id", authUser.id)
             .maybeSingle();
 
-          if (resData?.resident_id) {
-            // Update encrypted payload in core.residents
-            await supabase
-              .from("core.residents")
-              .update({ encrypted_payload: encrypted })
-              .eq("resident_id", resData.resident_id);
+          let residentId = resData?.resident_id;
 
-            // Also insert a log record in health.records
-            await supabase
-              .from("health.records")
+          if (!residentId) {
+            // Insert a new resident row if none exists
+            const { data: newRes, error: insErr } = await supabase
+              .schema("core")
+              .from("residents")
               .insert({
-                resident_id: resData.resident_id,
+                user_id: authUser.id,
+                barangay_id: 1, // Default to first barangay
+                address: "Zone 3, Barangay 45, Pasay City",
+                date_of_birth: "1992-04-12",
+                gender: "Male",
+                consent_given: true,
+                consent_granted: true,
+                encrypted_payload: encrypted
+              })
+              .select("resident_id")
+              .single();
+            
+            if (insErr) throw insErr;
+            residentId = newRes?.resident_id;
+          } else {
+            // Update encrypted payload in core.residents
+            const { error: updErr } = await supabase
+              .schema("core")
+              .from("residents")
+              .update({ encrypted_payload: encrypted })
+              .eq("resident_id", residentId);
+            if (updErr) throw updErr;
+          }
+
+          if (residentId) {
+            // Also insert a log record in health.records
+            const { error: recErr } = await supabase
+              .schema("health")
+              .from("records")
+              .insert({
+                resident_id: residentId,
                 encrypted_vitals: encrypted,
                 record_type: "updated",
                 recorded_by: authUser.id
               });
+            if (recErr) throw recErr;
 
             // Log administrative action in audit logs
-            await supabase
-              .from("security.audit_log")
+            const { error: auditErr } = await supabase
+              .schema("security")
+              .from("audit_log")
               .insert({
                 action: "UPDATE_HEALTH_RECORD",
                 target_table: "health.records",
-                target_id: resData.resident_id,
+                target_id: residentId,
                 details: { info: "Resident updated own encrypted medical profile" }
               });
+            if (auditErr) throw auditErr;
           }
         }
       }

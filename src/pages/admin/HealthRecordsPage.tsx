@@ -57,41 +57,87 @@ export default function HealthRecordsPage() {
       const cached = localStorage.getItem("respondaCare_residents") || "[]";
       const parsed = JSON.parse(cached);
       
-      const mapped = parsed.map((r: any, idx: number) => ({
-        id: r.id || `RC-${100 + idx}`,
-        name: r.name || "Unknown",
-        age: r.age || 30,
-        condition: "Encrypted profile loaded",
-        bp: "120/80",
-        bmi: "22.5",
-        last: r.lastUpdated || "2024-03-24",
-        risk: r.vulnerability || "Low",
-        encryptedPayload: r.encryptedPayload
+      const mapped = await Promise.all(parsed.map(async (r: any, idx: number) => {
+        let condition = "None on record";
+        let bpVal = "120/80";
+        let bmiVal = "22.5";
+        let ageVal = r.age || 30;
+        
+        if (r.dob) {
+          const birthYear = new Date(r.dob).getFullYear();
+          ageVal = new Date().getFullYear() - birthYear;
+        }
+
+        if (r.encryptedPayload) {
+          try {
+            const decrypted = (await decryptPayload(r.encryptedPayload, "barangay45key")) as any;
+            if (decrypted) {
+              condition = decrypted.chronic || decrypted.sample?.s || "None on record";
+              if (decrypted.vitals) {
+                bpVal = decrypted.vitals.bp || "120/80";
+                const h = parseFloat(decrypted.vitals.height);
+                const w = parseFloat(decrypted.vitals.weight);
+                if (h > 0 && w > 0) {
+                  bmiVal = (w / ((h / 100) * (h / 100))).toFixed(1);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to decrypt profile for health records page list", e);
+          }
+        }
+
+        return {
+          id: r.id || `RC-${100 + idx}`,
+          name: r.name || "Unknown",
+          age: ageVal,
+          condition: condition,
+          bp: bpVal,
+          bmi: bmiVal,
+          last: r.lastUpdated || "2024-03-24",
+          risk: r.vulnerability || "Low",
+          encryptedPayload: r.encryptedPayload
+        };
       }));
 
-      const combined = [...mapped, ...defaultRecords];
+      // Combine with default logs and handovers vitals
+      const localHandovers = JSON.parse(localStorage.getItem("respondaCare_handovers") || "[]");
+      const handoverRecords = localHandovers.map((h: any, idx: number) => ({
+        id: h.id || `RC-H-${idx}`,
+        name: h.patient_name || "Unknown",
+        age: 34,
+        condition: h.turnover_notes || "Trauma/Emergency Turnover",
+        bp: h.vitals?.bp || "120/80",
+        bmi: "23.0",
+        last: h.date || new Date().toISOString().slice(0, 10),
+        risk: h.severity_score >= 8 ? "High" : h.severity_score >= 4 ? "Medium" : "Low",
+        encryptedPayload: ""
+      }));
+
+      const combined = [...mapped, ...handoverRecords, ...defaultRecords];
       setHealthRecordsList(combined);
       
       // Aggregate counts
       const highRiskCount = combined.filter(r => r.risk === "High").length;
-      const chronicCount = combined.filter(r => r.condition !== "None on record").length;
+      const chronicCount = combined.filter(r => r.condition !== "None on record" && r.condition !== "None").length;
       
       setStats({
-        highRisk: 234 + highRiskCount,
-        chronic: 891 + chronicCount,
-        consults: 47
+        highRisk: highRiskCount,
+        chronic: chronicCount,
+        consults: 47 + localHandovers.length
       });
     } else {
       try {
         const { data: recData, error: recErr } = await supabase
-          .from("health.records")
+          .schema("health")
+          .from("records")
           .select("*")
           .order("created_at", { ascending: false });
         
         if (recErr) throw recErr;
         
-        const { data: resData } = await supabase.from("core.residents").select("resident_id, user_id, mobility_status, date_of_birth");
-        const { data: usersData } = await supabase.from("security.users").select("user_id, full_name");
+        const { data: resData } = await supabase.schema("core").from("residents").select("resident_id, user_id, mobility_status, date_of_birth");
+        const { data: usersData } = await supabase.schema("security").from("users").select("user_id, full_name");
         
         const resMap = new Map(resData?.map(r => [r.resident_id, r]) || []);
         const userMap = new Map(usersData?.map(u => [u.user_id, u]) || []);
