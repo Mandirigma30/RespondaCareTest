@@ -82,8 +82,10 @@ export default function EmergencyPage() {
     // Save locally
     const newAlert = {
       id: `INC-${Math.floor(1000 + Math.random() * 9000)}`,
+      status: "Active",
       category: category,
-      barangay: "Zone 3, Barangay 45",
+      barangay: residentProfile?.barangay || "Zone 3, Barangay 45",
+      address: residentProfile?.address || "Zone 3, Barangay 45, Pasay City",
       lat: lat || 14.5547,
       lng: lng || 121.0244,
       timestamp: new Date().toISOString()

@@ -1,7 +1,7 @@
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, Tooltip } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 // Fix default icon issue in standard environments
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -35,8 +35,20 @@ interface MapViewProps {
 
 function MapController({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
+  const lastCenterRef = useRef<[number, number] | null>(null);
+
   useEffect(() => {
-    map.setView(center, zoom);
+    if (
+      !lastCenterRef.current ||
+      lastCenterRef.current[0] !== center[0] ||
+      lastCenterRef.current[1] !== center[1]
+    ) {
+      lastCenterRef.current = center;
+      map.flyTo(center, zoom, {
+        animate: true,
+        duration: 1.2
+      });
+    }
   }, [center, zoom, map]);
   return null;
 }
@@ -89,6 +101,11 @@ export default function MapView({ incidents, center, zoom = 16 }: MapViewProps) 
               <div className="text-sm font-semibold text-black">{inc.label}</div>
               <div className="text-xs text-gray-500">{inc.id}</div>
             </Popup>
+            <Tooltip direction="top" offset={[0, -20]} opacity={0.9}>
+              <div style={{ padding: "2px 4px", fontSize: "12px", fontWeight: "bold" }}>
+                {inc.label} ({inc.id})
+              </div>
+            </Tooltip>
             {inc.type === "critical" && (
               <Circle
                 center={[inc.lat, inc.lng]}

@@ -107,6 +107,38 @@ export default function LoginPage() {
   const [detectedRole, setDetectedRole] = useState<"patient" | "responder" | "admin" | null>(null);
   const [currentOtpCode, setCurrentOtpCode] = useState("");
 
+  // Forgot Password modal state
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotStatus, setForgotStatus] = useState<"idle" | "sent" | "error">("idle");
+  const [forgotError, setForgotError] = useState("");
+
+  const handleForgotPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) {
+      setForgotError("Please enter your email address.");
+      return;
+    }
+    setForgotLoading(true);
+    setForgotError("");
+    try {
+      if (!isPlaceholderUrl) {
+        const { error: resetErr } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), {
+          redirectTo: `${window.location.origin}/login`,
+        });
+        if (resetErr) throw resetErr;
+      }
+      // Sandbox: just pretend it worked
+      setForgotStatus("sent");
+    } catch (err: any) {
+      setForgotError(err.message || "Failed to send reset email.");
+      setForgotStatus("error");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   // References for OTP fields focus management
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -531,9 +563,13 @@ export default function LoginPage() {
                   required
                 />
                 <div className="flex justify-end">
-                  <Link to="#" className="text-xs text-[#8b1a1a] hover:underline font-medium">
+                  <button
+                    type="button"
+                    onClick={() => { setShowForgotModal(true); setForgotEmail(email); setForgotStatus("idle"); setForgotError(""); }}
+                    className="text-xs text-[#8b1a1a] hover:underline font-medium cursor-pointer"
+                  >
                     Forgot password?
-                  </Link>
+                  </button>
                 </div>
 
                 <button
@@ -674,13 +710,96 @@ export default function LoginPage() {
           )}
         </section>
 
-        {step === 1 && (
+        {step === 1 && role !== "admin" && (
           <p data-animate className="mt-8 text-sm text-[#8b949e]">
             First time here?{" "}
-            <Link to="/register" className="text-[#8b1a1a] font-semibold hover:underline">
+            <Link
+              to={role === "responder" ? "/register/responder" : "/register"}
+              className="text-[#8b1a1a] font-semibold hover:underline"
+            >
               Create an account
             </Link>
           </p>
+        )}
+
+        {/* Forgot Password Modal */}
+        {showForgotModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowForgotModal(false); }}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl p-8 shadow-2xl"
+              style={{ border: "1px solid #30363d", background: "linear-gradient(180deg,#161b22 0%,#0d1117 100%)" }}
+            >
+              {forgotStatus === "sent" ? (
+                <div className="flex flex-col items-center text-center space-y-4">
+                  <div className="w-14 h-14 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+                    <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+                  </div>
+                  <h2 className="text-lg font-bold text-white">Reset Link Sent</h2>
+                  <p className="text-sm text-[#8b949e] leading-relaxed">
+                    {isPlaceholderUrl
+                      ? "Sandbox mode — no real email was sent. In production, check your inbox for the password reset link."
+                      : `A password reset link has been sent to ${forgotEmail}. Check your inbox.`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(false)}
+                    className="w-full mt-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-3 px-4 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Back to Login
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} className="space-y-5">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Reset Password</h2>
+                    <p className="text-sm text-[#8b949e] mt-1">Enter your account email and we'll send you a reset link.</p>
+                  </div>
+
+                  {forgotError && (
+                    <div className="p-3 rounded-lg bg-red-950/45 border border-[#a01e1e] text-sm text-red-300 font-mono">
+                      ⚠️ {forgotError}
+                    </div>
+                  )}
+
+                  <FormInput
+                    id="forgot-email"
+                    type="email"
+                    label="Email Address"
+                    placeholder="your@email.com"
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    icon={<User className="h-5 w-5" />}
+                    required
+                  />
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotModal(false)}
+                      className="flex-1 py-3 rounded-lg border border-[#30363d] bg-[#1c2128] hover:bg-[#30363d] text-sm font-semibold text-[#8b949e] hover:text-white transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={forgotLoading}
+                      className="flex-1 flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-3 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {forgotLoading ? (
+                        <><Loader2 className="h-4 w-4 animate-spin" /><span>Sending...</span></>
+                      ) : (
+                        <span>Send Reset Link</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
         )}
       </main>
 

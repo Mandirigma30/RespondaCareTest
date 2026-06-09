@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
-import { Download, Pill, AlertTriangle, Loader2 } from "lucide-react";
+import { Download, Pill, AlertTriangle, Loader2, Pencil, Plus, X, UserCircle, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { QRCodeCanvas } from "qrcode.react";
 import jsPDF from "jspdf";
-import { supabase } from "../../lib/supabase";
+import { supabase, isPlaceholderUrl } from "../../lib/supabase";
+import { FormInput, FormSelect } from "../../components/ui/FormInput";
+
+interface EmergencyContact {
+  name: string;
+  rel: string;
+  phone: string;
+}
 
 export default function PatientDashboardPage() {
   const ref = useRef<HTMLDivElement>(null);
@@ -13,7 +20,23 @@ export default function PatientDashboardPage() {
   const [patientName, setPatientName] = useState("");
   const [decryptedProfile, setDecryptedProfile] = useState<any>(null);
   const [patientId, setPatientId] = useState("RC-8829-X");
-  
+
+  // Edit Personal Info modal
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editContact, setEditContact] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editDob, setEditDob] = useState("");
+  const [editGender, setEditGender] = useState("Male");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editSuccess, setEditSuccess] = useState(false);
+
+  // Dynamic Emergency Contacts
+  const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [newContactName, setNewContactName] = useState("");
+  const [newContactRel, setNewContactRel] = useState("");
+  const [newContactPhone, setNewContactPhone] = useState("");  
   // Stagger entry animations
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -51,7 +74,38 @@ export default function PatientDashboardPage() {
         sessionUserId = authData.user.id;
       }
 
-      if (currentName) setPatientName(currentName);
+      if (currentName) {
+        setPatientName(currentName);
+        setEditName(currentName);
+      }
+
+      // Load personal info from localStorage
+      const personalKey = `respondaCare_personal_${trimmedEmail || "guest"}`;
+      const storedPersonal = localStorage.getItem(personalKey);
+      if (storedPersonal) {
+        try {
+          const p = JSON.parse(storedPersonal);
+          setEditContact(p.contact || "");
+          setEditAddress(p.address || "");
+          setEditDob(p.dob || "");
+          setEditGender(p.gender || "Male");
+        } catch (e) {}
+      }
+
+      // Load emergency contacts from localStorage
+      const contactsKey = `respondaCare_ec_${trimmedEmail || "guest"}`;
+      const storedContacts = localStorage.getItem(contactsKey);
+      if (storedContacts) {
+        try {
+          setEmergencyContacts(JSON.parse(storedContacts));
+        } catch (e) {}
+      } else {
+        // Default placeholder contacts
+        setEmergencyContacts([
+          { name: "Sarah Johnson", rel: "Spouse", phone: "(555) 012-3456" },
+          { name: "Dr. Michael Chen", rel: "Primary MD", phone: "(555) 987-6543" },
+        ]);
+      }
 
       // 3. Find encrypted medical card: try Database query first, then fallback to local storage
       let foundPayload = "";
@@ -225,6 +279,89 @@ export default function PatientDashboardPage() {
     loadUser();
   }, []);
 
+  // ── Personal Info helpers ────────────────────────────────────────────────
+  const handleSavePersonalInfo = async () => {
+    setEditSaving(true);
+    try {
+      const session = localStorage.getItem("respondaCare_session");
+      let sessionEmail = "guest";
+      if (session) {
+        try {
+          const p = JSON.parse(session);
+          // Update name in session
+          p.name = editName.trim() || p.name;
+          sessionEmail = p.email || "guest";
+          localStorage.setItem("respondaCare_session", JSON.stringify(p));
+        } catch (e) {}
+      }
+      setPatientName(editName.trim() || patientName);
+
+      const personalKey = `respondaCare_personal_${sessionEmail}`;
+      localStorage.setItem(personalKey, JSON.stringify({
+        contact: editContact,
+        address: editAddress,
+        dob: editDob,
+        gender: editGender,
+      }));
+
+      // Sync to Supabase if live
+      if (!isPlaceholderUrl) {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user) {
+          await supabase
+            .schema("core")
+            .from("residents")
+            .update({
+              contact_number: editContact,
+              address: editAddress,
+              date_of_birth: editDob || undefined,
+              gender: editGender,
+            })
+            .eq("user_id", authData.user.id);
+          await supabase
+            .schema("security")
+            .from("users")
+            .update({ full_name: editName.trim() })
+            .eq("auth_uid", authData.user.id);
+        }
+      }
+
+      setEditSuccess(true);
+      setTimeout(() => { setEditSuccess(false); setShowEditModal(false); }, 1500);
+    } catch (e) {
+      console.error("Failed to save personal info", e);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  // ── Emergency Contact helpers ────────────────────────────────────────────
+  const persistContacts = (contacts: EmergencyContact[]) => {
+    const session = localStorage.getItem("respondaCare_session");
+    let sessionEmail = "guest";
+    if (session) { try { sessionEmail = JSON.parse(session).email || "guest"; } catch (e) {} }
+    localStorage.setItem(`respondaCare_ec_${sessionEmail}`, JSON.stringify(contacts));
+  };
+
+  const handleAddContact = () => {
+    if (!newContactName.trim()) return;
+    const updated = [...emergencyContacts, {
+      name: newContactName.trim(),
+      rel: newContactRel.trim() || "Contact",
+      phone: newContactPhone.trim() || "N/A",
+    }];
+    setEmergencyContacts(updated);
+    persistContacts(updated);
+    setNewContactName(""); setNewContactRel(""); setNewContactPhone("");
+    setShowAddContact(false);
+  };
+
+  const handleRemoveContact = (idx: number) => {
+    const updated = emergencyContacts.filter((_, i) => i !== idx);
+    setEmergencyContacts(updated);
+    persistContacts(updated);
+  };
+
   const handleDownloadPdf = () => {
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [100, 150] });
     
@@ -284,25 +421,33 @@ export default function PatientDashboardPage() {
 
   return (
     <div ref={ref} className="bg-[#0f1115] min-h-full pb-12 text-white">
-      {/* Top Header */}
-      <header className="p-8 flex justify-between items-start" data-animate>
-        <div>
-          <h1 className="text-3xl font-bold text-white mb-1">Welcome back, {patientName.split(" ")[0]}</h1>
-          <p className="text-[#9ca3af] text-sm">Your health overview and emergency tools are ready.</p>
-        </div>
-        <div className="flex items-center gap-3 bg-[#1a1d23] px-4 py-2 rounded-full border border-gray-800">
-          <div className="text-right">
-            <p className="text-sm font-bold text-white leading-tight">{patientName}</p>
-            <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
-          </div>
-          <div className="relative">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
-              {patientName.charAt(0)}
+          {/* Top Header */}
+          <header className="p-8 flex justify-between items-start" data-animate>
+            <div>
+              <h1 className="text-3xl font-bold text-white mb-1">Welcome back, {patientName.split(" ")[0]}</h1>
+              <p className="text-[#9ca3af] text-sm">Your health overview and emergency tools are ready.</p>
             </div>
-            <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[#0f1115] rounded-full animate-pulse" />
-          </div>
-        </div>
-      </header>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => { setShowEditModal(true); setEditSuccess(false); }}
+                className="flex items-center gap-1.5 text-xs text-[#8b949e] hover:text-white bg-[#1a1d23] border border-gray-800 px-3 py-2 rounded-full transition-colors cursor-pointer"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit Info
+              </button>
+              <div className="flex items-center gap-3 bg-[#1a1d23] px-4 py-2 rounded-full border border-gray-800">
+                <div className="text-right">
+                  <p className="text-sm font-bold text-white leading-tight">{patientName}</p>
+                  <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
+                </div>
+                <div className="relative">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
+                    {patientName.charAt(0)}
+                  </div>
+                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[#0f1115] rounded-full animate-pulse" />
+                </div>
+              </div>
+            </div>
+          </header>
 
       <div className="px-8 pb-8 flex flex-col lg:flex-row gap-8 max-w-7xl mx-auto w-full">
         {/* Main Column */}
@@ -408,20 +553,64 @@ export default function PatientDashboardPage() {
 
           {/* Emergency Contacts */}
           <section data-animate className="bg-[#1a1d23] p-6 rounded-3xl border border-gray-800">
-            <p className="text-[10px] font-bold text-[#9ca3af] tracking-widest uppercase mb-6">Emergency Contacts</p>
-            <div className="space-y-5">
-              {[
-                { name: "Sarah Johnson",   rel: "Spouse",     phone: "(555) 012-3456" },
-                { name: "Dr. Michael Chen", rel: "Primary MD", phone: "(555) 987-6543" },
-              ].map((c) => (
-                <div key={c.name} className="flex items-center gap-4">
+            <div className="flex justify-between items-center mb-5">
+              <p className="text-[10px] font-bold text-[#9ca3af] tracking-widest uppercase">Emergency Contacts</p>
+              <button
+                onClick={() => setShowAddContact(true)}
+                className="flex items-center gap-1 text-[10px] font-bold text-[#8b1a1a] hover:text-red-400 transition-colors cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add
+              </button>
+            </div>
+
+            {/* Add Contact Form */}
+            {showAddContact && (
+              <div className="mb-4 p-4 bg-[#0f1115]/60 rounded-xl border border-gray-700 space-y-3">
+                <p className="text-[10px] font-bold text-[#8b949e] uppercase tracking-widest">New Contact</p>
+                <input
+                  type="text" placeholder="Full Name" value={newContactName}
+                  onChange={(e) => setNewContactName(e.target.value)}
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 outline-none transition-colors"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text" placeholder="Relationship" value={newContactRel}
+                    onChange={(e) => setNewContactRel(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 outline-none transition-colors"
+                  />
+                  <input
+                    type="tel" placeholder="Phone Number" value={newContactPhone}
+                    onChange={(e) => setNewContactPhone(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 outline-none transition-colors"
+                  />
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button onClick={handleAddContact} className="flex-1 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white text-xs font-bold py-2 rounded-lg transition-colors cursor-pointer">Save Contact</button>
+                  <button onClick={() => setShowAddContact(false)} className="px-4 text-xs text-[#8b949e] hover:text-white border border-[#30363d] rounded-lg transition-colors cursor-pointer">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {emergencyContacts.length === 0 && (
+                <p className="text-xs text-[#8b949e] text-center py-3">No emergency contacts added yet.</p>
+              )}
+              {emergencyContacts.map((c, idx) => (
+                <div key={idx} className="flex items-center gap-4 group">
                   <div className="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-white">
                     {c.name[0]}
                   </div>
-                  <div>
-                    <h4 className="font-bold text-white text-sm">{c.name}</h4>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-bold text-white text-sm truncate">{c.name}</h4>
                     <p className="text-[11px] text-[#9ca3af]">{c.rel} • {c.phone}</p>
                   </div>
+                  <button
+                    onClick={() => handleRemoveContact(idx)}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-red-600 hover:text-red-400 transition-all cursor-pointer flex-shrink-0"
+                    title="Remove contact"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -429,6 +618,97 @@ export default function PatientDashboardPage() {
 
         </div>
       </div>
+
+      {/* ── Edit Personal Info Modal ────────────────────────────────── */}
+      {showEditModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowEditModal(false); }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl p-8 shadow-2xl"
+            style={{ border: "1px solid #30363d", background: "linear-gradient(180deg,#1a1d23 0%,#0f1115 100%)" }}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <UserCircle className="h-6 w-6 text-[#8b1a1a]" />
+                <h2 className="text-lg font-bold text-white">Edit Personal Information</h2>
+              </div>
+              <button onClick={() => setShowEditModal(false)} className="text-[#8b949e] hover:text-white transition-colors cursor-pointer">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {editSuccess && (
+              <div className="mb-4 p-3 rounded-lg bg-emerald-950/45 border border-emerald-500/30 text-sm text-emerald-300 flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4" /> Saved successfully!
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Full Name</label>
+                <input
+                  type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Contact Number</label>
+                <input
+                  type="tel" value={editContact} onChange={(e) => setEditContact(e.target.value)}
+                  placeholder="+63 917 000 0000"
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Home Address</label>
+                <input
+                  type="text" value={editAddress} onChange={(e) => setEditAddress(e.target.value)}
+                  placeholder="Street, Barangay, City"
+                  className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Date of Birth</label>
+                  <input
+                    type="date" value={editDob} onChange={(e) => setEditDob(e.target.value)}
+                    className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Gender</label>
+                  <select
+                    value={editGender} onChange={(e) => setEditGender(e.target.value)}
+                    className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors cursor-pointer"
+                  >
+                    <option>Male</option><option>Female</option><option>Other</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="flex-1 py-3 rounded-xl border border-[#30363d] bg-[#1c2128] hover:bg-[#30363d] text-sm font-semibold text-[#8b949e] hover:text-white transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePersonalInfo}
+                disabled={editSaving}
+                className="flex-1 flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-3 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {editSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <span>{editSaving ? "Saving..." : "Save Changes"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

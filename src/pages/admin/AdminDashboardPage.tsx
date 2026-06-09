@@ -60,8 +60,8 @@ export default function AdminDashboardPage() {
         time: "Just now",
         priority: "critical" as const,
         icon: <AlertTriangle className="w-6 h-6 text-red-500 animate-pulse" />,
-        latitude: item.latitude || 14.5547 + (Math.random() - 0.5) * 0.005,
-        longitude: item.longitude || 121.0244 + (Math.random() - 0.5) * 0.005
+        latitude: item.latitude || item.lat || 14.5547 + (Math.random() - 0.5) * 0.005,
+        longitude: item.longitude || item.lng || 121.0244 + (Math.random() - 0.5) * 0.005
       }));
 
       setActiveIncidentsList([...dynamicTriggers, ...defaultIncidents]);
@@ -145,6 +145,12 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     loadRealtimeIncidents();
 
+    // Poll localStorage every 5s in sandbox mode so resident SOS events appear immediately
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    if (isPlaceholderUrl) {
+      pollInterval = setInterval(loadRealtimeIncidents, 5000);
+    }
+
     let subscription: any = null;
     if (!isPlaceholderUrl) {
       subscription = supabase
@@ -160,6 +166,7 @@ export default function AdminDashboardPage() {
     }
 
     return () => {
+      if (pollInterval) clearInterval(pollInterval);
       if (subscription) {
         supabase.removeChannel(subscription);
       }

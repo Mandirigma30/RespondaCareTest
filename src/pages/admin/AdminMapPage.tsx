@@ -55,8 +55,8 @@ export default function AdminMapPage() {
         id: item.id || `#INC-${Math.floor(1000 + Math.random() * 9000)}`,
         label: `${item.category || "Panic SOS"} Alert`,
         type: "critical",
-        lat: item.latitude || 14.5547 + (Math.random() - 0.5) * 0.005,
-        lng: item.longitude || 121.0244 + (Math.random() - 0.5) * 0.005,
+        lat: item.latitude || item.lat || 14.5547 + (Math.random() - 0.5) * 0.005,
+        lng: item.longitude || item.lng || 121.0244 + (Math.random() - 0.5) * 0.005,
         icon: "⚠️"
       }));
 

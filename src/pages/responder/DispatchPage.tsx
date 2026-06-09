@@ -90,7 +90,7 @@ export default function DispatchPage() {
             .map((inc: any) => ({
               id: inc.id || "#INC-9999",
               type: inc.category || "Emergency SOS",
-              address: inc.barangay || "Zone 3, Pasay City",
+              address: inc.address || inc.barangay || "Zone 3, Pasay City",
               eta: "5 min",
               priority: "critical",
               icon: "🚨",
@@ -103,6 +103,12 @@ export default function DispatchPage() {
 
     fetchDispatches();
 
+    // Poll localStorage every 5s in sandbox mode to pick up new SOS events
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    if (isPlaceholderUrl) {
+      pollInterval = setInterval(fetchDispatches, 5000);
+    }
+
     // Set up real-time subscription for dispatch updates
     if (!isPlaceholderUrl) {
       const channel = supabase
@@ -114,8 +120,13 @@ export default function DispatchPage() {
 
       return () => {
         supabase.removeChannel(channel);
+        if (pollInterval) clearInterval(pollInterval);
       };
     }
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, []);
 
   const handleNavigate = (address: string) => {

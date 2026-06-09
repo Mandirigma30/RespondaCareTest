@@ -4,7 +4,8 @@ import { useNavigate, Link } from "react-router-dom";
 import { gsap } from "gsap";
 import { 
   FileText, User, CheckCircle, Printer, Send, 
-  ArrowLeft, Loader2, Shield, HeartPulse, Stethoscope, FileDown, RotateCcw 
+  ArrowLeft, Loader2, Shield, HeartPulse, Stethoscope, FileDown, RotateCcw,
+  Pencil, X, CheckCircle2
 } from "lucide-react";
 import { TopBar } from "../../components/layout/TopBar";
 import { FormInput, FormTextarea, FormSelect } from "../../components/ui/FormInput";
@@ -90,6 +91,54 @@ export default function TurnoverPage() {
   const [submitted, setSubmitted] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
 
+  // Edit Personal Info
+  const [showProfilePanel, setShowProfilePanel] = useState(false);
+  const [editResponderName, setEditResponderName] = useState("");
+  const [editUnit, setEditUnit] = useState("");
+  const [editContact, setEditContact] = useState("");
+  const [editLicense, setEditLicense] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileSuccess, setProfileSuccess] = useState(false);
+
+  const handleSaveProfile = async () => {
+    setProfileSaving(true);
+    try {
+      const session = localStorage.getItem("respondaCare_session");
+      if (session) {
+        const parsed = JSON.parse(session);
+        parsed.name = editResponderName.trim() || parsed.name;
+        localStorage.setItem("respondaCare_session", JSON.stringify(parsed));
+      }
+      // Persist extra fields
+      const profileKey = `respondaCare_responder_profile_${editResponderName || "guest"}`;
+      localStorage.setItem(profileKey, JSON.stringify({
+        unit: editUnit,
+        contact: editContact,
+        license: editLicense,
+      }));
+      setResponderId(editResponderName.trim() || responderId);
+
+      // Sync to Supabase if live
+      if (!isPlaceholderUrl) {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user) {
+          await supabase
+            .schema("security")
+            .from("users")
+            .update({ full_name: editResponderName.trim() })
+            .eq("auth_uid", authData.user.id);
+        }
+      }
+
+      setProfileSuccess(true);
+      setTimeout(() => { setProfileSuccess(false); setShowProfilePanel(false); }, 1500);
+    } catch (e) {
+      console.error("Failed to save responder profile", e);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
   // GSAP animations
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -146,12 +195,16 @@ export default function TurnoverPage() {
     if (userSession) {
       try {
         const u = JSON.parse(userSession);
-        setResponderId(u.name || "FR-Alpha");
+        const name = u.name || "FR-Alpha";
+        setResponderId(name);
+        setEditResponderName(name);
       } catch (e) {
         setResponderId("FR-Alpha");
+        setEditResponderName("FR-Alpha");
       }
     } else {
       setResponderId("FR-Alpha");
+      setEditResponderName("FR-Alpha");
     }
   }, []);
 
@@ -491,6 +544,7 @@ export default function TurnoverPage() {
   }
 
   return (
+    <>
     <div ref={ref} className="flex flex-col h-full bg-[#0c0f16] text-white">
       <TopBar title="Hospital Handover / PCR" showSearch={false} />
       <div className="px-8 py-6 flex-1 max-w-6xl mx-auto w-full pb-20">
@@ -507,6 +561,13 @@ export default function TurnoverPage() {
             <p className="text-[#8b949e] mt-1">Unified Incident Report (UIR) for emergency medical facility patient hand-off. Incident #{incidentId}</p>
           </div>
           <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => { setShowProfilePanel(true); setProfileSuccess(false); }}
+              className="py-2.5 px-4 rounded-lg border border-[#30363d] bg-[#1a1d23] hover:bg-[#30363d] text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <Pencil className="w-4 h-4" /> Edit Profile
+            </button>
             <button 
               type="button" 
               onClick={handleExportPdf}
@@ -785,5 +846,87 @@ export default function TurnoverPage() {
         </form>
       </div>
     </div>
+
+    {/* ── Edit Profile Slide-over Panel ─────────────────────────────── */}
+    {showProfilePanel && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+        onClick={(e) => { if (e.target === e.currentTarget) setShowProfilePanel(false); }}
+      >
+        <div
+          className="w-full max-w-md rounded-2xl p-8 shadow-2xl"
+          style={{ border: "1px solid #30363d", background: "linear-gradient(180deg,#161b22 0%,#0c0f16 100%)" }}
+        >
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <Shield className="h-5 w-5 text-[#8b1a1a]" />
+              <h2 className="text-lg font-bold text-white">Edit Responder Profile</h2>
+            </div>
+            <button onClick={() => setShowProfilePanel(false)} className="text-[#8b949e] hover:text-white transition-colors cursor-pointer">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {profileSuccess && (
+            <div className="mb-4 p-3 rounded-lg bg-emerald-950/45 border border-emerald-500/30 text-sm text-emerald-300 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" /> Profile saved successfully!
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Full Name</label>
+              <input
+                type="text" value={editResponderName} onChange={(e) => setEditResponderName(e.target.value)}
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Unit / Station</label>
+              <input
+                type="text" value={editUnit} onChange={(e) => setEditUnit(e.target.value)}
+                placeholder="e.g. RESP-ALPHA, Station 4"
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">Contact Number</label>
+              <input
+                type="tel" value={editContact} onChange={(e) => setEditContact(e.target.value)}
+                placeholder="+63 917 000 0000"
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#8b949e] mb-1.5 uppercase tracking-wider">License / ID Number</label>
+              <input
+                type="text" value={editLicense} onChange={(e) => setEditLicense(e.target.value)}
+                placeholder="EMT-XXXXX"
+                className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={() => setShowProfilePanel(false)}
+              className="flex-1 py-3 rounded-xl border border-[#30363d] bg-[#1c2128] hover:bg-[#30363d] text-sm font-semibold text-[#8b949e] hover:text-white transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSaveProfile}
+              disabled={profileSaving}
+              className="flex-1 flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-3 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {profileSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              <span>{profileSaving ? "Saving..." : "Save Profile"}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
