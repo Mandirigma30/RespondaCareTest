@@ -1,29 +1,18 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useEffect, useRef } from "react";
 import { gsap } from "gsap";
 import { Shield, User, Radio, ArrowRight, PlusSquare } from "lucide-react";
 
 export default function GatewayPage() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
 
   useEffect(() => {
-    const session = localStorage.getItem("respondaCare_session");
-    if (session) {
-      try {
-        const parsed = JSON.parse(session);
-        if (parsed?.role === "admin") {
-          navigate("/admin/dashboard");
-        } else if (parsed?.role === "responder") {
-          navigate("/responder/dispatch");
-        } else if (parsed?.role === "patient") {
-          navigate("/patient/dashboard");
-        }
-      } catch (e) {
-        console.warn("Invalid session", e);
-      }
+    const hash = window.location.hash;
+    const search = window.location.search;
+    if (hash.includes("type=recovery") || search.includes("type=recovery") || hash.includes("access_token")) {
+      window.location.href = `/login${search}${hash}`;
     }
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     const ctx = gsap.context(() => {

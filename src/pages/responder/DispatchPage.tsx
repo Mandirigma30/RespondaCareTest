@@ -4,6 +4,7 @@ import { Radio, MapPin, Clock, CheckCircle, Navigation, Phone } from "lucide-rea
 import { TopBar } from "../../components/layout/TopBar";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
+import { useNavigate } from "react-router-dom";
 import { supabase, isPlaceholderUrl } from "../../lib/supabase";
 
 interface DispatchItem {
@@ -29,10 +30,16 @@ const borderMap: Record<string, string> = {
 };
 
 export default function DispatchPage() {
+  const navigate = useNavigate();
   const ref = useRef<HTMLDivElement>(null);
   const [dispatches, setDispatches] = useState<DispatchItem[]>(defaultDispatches);
   const [searchQuery, setSearchQuery] = useState("");
   const [responderName, setResponderName] = useState("First Responder");
+
+  const handleGoOffDuty = () => {
+    localStorage.removeItem("respondaCare_session");
+    navigate("/");
+  };
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -220,7 +227,7 @@ export default function DispatchPage() {
               <p className="text-[#8b949e] text-xs">Unit: {responderName} • Logged in active shift</p>
             </div>
           </div>
-          <Button variant="ghost" size="sm">Go Off Duty</Button>
+          <Button variant="ghost" size="sm" onClick={handleGoOffDuty}>Go Off Duty</Button>
         </div>
 
         {/* Active Assignments */}

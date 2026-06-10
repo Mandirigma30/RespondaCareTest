@@ -174,6 +174,53 @@ export default function AddResidentPage() {
             });
           if (recordErr) console.warn("Failed to create initial health record:", recordErr);
 
+          // Sync to health.profiles
+          const { error: profErr } = await supabase
+            .schema("health")
+            .from("profiles")
+            .insert({
+              resident_id: resD.resident_id,
+              blood_type: bloodType || null,
+              allergies: allergies || "None",
+              medications: medications || "None",
+              past_medical_hx: quickNotes || "None",
+            });
+          if (profErr) console.warn("Failed to create health.profiles:", profErr);
+
+          // Sync to health.allergy_flags
+          if (allergies && allergies.trim()) {
+            const listAllergies = allergies.split(",").map(a => a.trim()).filter(Boolean);
+            for (const item of listAllergies) {
+              const { error: algErr } = await supabase
+                .schema("health")
+                .from("allergy_flags")
+                .insert({
+                  resident_id: resD.resident_id,
+                  allergen_name: item,
+                  severity: 'moderate'
+                });
+              if (algErr) console.warn("Failed to insert allergy flag:", algErr);
+            }
+          }
+
+          // Sync to health.medications
+          if (medications && medications.trim()) {
+            const listMeds = medications.split(/,|\n/).map(m => m.trim()).filter(Boolean);
+            for (const item of listMeds) {
+              const { error: medErr } = await supabase
+                .schema("health")
+                .from("medications")
+                .insert({
+                  resident_id: resD.resident_id,
+                  drug_name: item,
+                  dosage: "As directed",
+                  frequency: "As directed",
+                  is_active: true
+                });
+              if (medErr) console.warn("Failed to insert medication:", medErr);
+            }
+          }
+
           // 4. Log Audit Trail
           await supabase.schema("security").from("audit_log").insert({
             action: "INSERT",

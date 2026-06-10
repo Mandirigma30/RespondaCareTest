@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
-import { Download, Pill, AlertTriangle, Loader2, Pencil, Plus, X, UserCircle, CheckCircle2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Download, Pill, AlertTriangle, Loader2, Pencil, Plus, X, UserCircle, CheckCircle2, LogOut } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { QRCodeCanvas } from "qrcode.react";
 import jsPDF from "jspdf";
 import { supabase, isPlaceholderUrl } from "../../lib/supabase";
-import { FormInput, FormSelect } from "../../components/ui/FormInput";
 
 interface EmergencyContact {
   name: string;
@@ -16,6 +15,8 @@ interface EmergencyContact {
 
 export default function PatientDashboardPage() {
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [qrPayload, setQrPayload] = useState("");
   const [patientName, setPatientName] = useState("");
   const [decryptedProfile, setDecryptedProfile] = useState<any>(null);
@@ -30,6 +31,16 @@ export default function PatientDashboardPage() {
   const [editGender, setEditGender] = useState("Male");
   const [editSaving, setEditSaving] = useState(false);
   const [editSuccess, setEditSuccess] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  // Trigger Edit Info modal if ?edit=true query param is present
+  useEffect(() => {
+    if (searchParams.get("edit") === "true") {
+      setShowEditModal(true);
+      setEditSuccess(false);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Dynamic Emergency Contacts
   const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
@@ -50,6 +61,7 @@ export default function PatientDashboardPage() {
     const loadUser = async () => {
       let currentName = "";
       let sessionUserId = "";
+      let trimmedEmail = "";
 
       // 1. Prioritize localStorage session details
       const session = localStorage.getItem("respondaCare_session");
@@ -59,6 +71,9 @@ export default function PatientDashboardPage() {
           if (parsed.name && parsed.name !== "Alex Johnson") {
             currentName = parsed.name;
             sessionUserId = parsed.auth_uid;
+          }
+          if (parsed.email) {
+            trimmedEmail = parsed.email.trim().toLowerCase();
           }
         } catch (e) {}
       }
@@ -72,6 +87,9 @@ export default function PatientDashboardPage() {
           authData.user.email ||
           "";
         sessionUserId = authData.user.id;
+      }
+      if (authData?.user?.email) {
+        trimmedEmail = authData.user.email.trim().toLowerCase();
       }
 
       if (currentName) {
@@ -115,7 +133,7 @@ export default function PatientDashboardPage() {
         const { data: resData, error: checkError } = await supabase
           .schema("core")
           .from("residents")
-          .select("resident_id, encrypted_payload")
+          .select("resident_id, encrypted_payload, address, date_of_birth, gender, contact_number")
           .eq("user_id", sessionUserId)
           .maybeSingle();
         
@@ -123,9 +141,16 @@ export default function PatientDashboardPage() {
           console.error("Error checking core.residents:", checkError);
         }
 
-        if (resData?.encrypted_payload) {
-          foundPayload = resData.encrypted_payload;
-          isSyncedInSupabase = true;
+        if (resData) {
+          if (resData.address) setEditAddress(resData.address);
+          if (resData.date_of_birth) setEditDob(resData.date_of_birth);
+          if (resData.gender) setEditGender(resData.gender);
+          if (resData.contact_number) setEditContact(resData.contact_number);
+
+          if (resData.encrypted_payload) {
+            foundPayload = resData.encrypted_payload;
+            isSyncedInSupabase = true;
+          }
           if (resData.resident_id) {
             setPatientId("RC-" + resData.resident_id.substring(0, 6).toUpperCase());
           }
@@ -422,29 +447,67 @@ export default function PatientDashboardPage() {
   return (
     <div ref={ref} className="bg-[#0f1115] min-h-full pb-12 text-white">
           {/* Top Header */}
-          <header className="p-8 flex justify-between items-start" data-animate>
+          <header className="p-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 relative z-50" data-animate>
             <div>
               <h1 className="text-3xl font-bold text-white mb-1">Welcome back, {patientName.split(" ")[0]}</h1>
               <p className="text-[#9ca3af] text-sm">Your health overview and emergency tools are ready.</p>
             </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => { setShowEditModal(true); setEditSuccess(false); }}
-                className="flex items-center gap-1.5 text-xs text-[#8b949e] hover:text-white bg-[#1a1d23] border border-gray-800 px-3 py-2 rounded-full transition-colors cursor-pointer"
+            <div className="flex items-center gap-3 relative">
+              <div 
+                className="relative"
+                onMouseEnter={() => setShowDropdown(true)}
+                onMouseLeave={() => setShowDropdown(false)}
               >
-                <Pencil className="h-3.5 w-3.5" /> Edit Info
-              </button>
-              <div className="flex items-center gap-3 bg-[#1a1d23] px-4 py-2 rounded-full border border-gray-800">
-                <div className="text-right">
-                  <p className="text-sm font-bold text-white leading-tight">{patientName}</p>
-                  <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
-                </div>
-                <div className="relative">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
-                    {patientName.charAt(0)}
+                <button
+                  onClick={() => setShowDropdown(!showDropdown)}
+                  className="flex items-center gap-3 bg-[#1a1d23] hover:bg-[#252930] px-4 py-2 rounded-full border border-gray-800 transition-colors cursor-pointer text-left focus:outline-none"
+                >
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-white leading-tight">{patientName || "Guest"}</p>
+                    <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
                   </div>
-                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[#0f1115] rounded-full animate-pulse" />
-                </div>
+                  <div className="relative">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
+                      {(patientName || "G").charAt(0).toUpperCase()}
+                    </div>
+                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[#0f1115] rounded-full animate-pulse" />
+                  </div>
+                </button>
+
+                {showDropdown && (
+                  <div className="absolute right-0 top-full pt-2 w-48 z-50 text-white text-xs">
+                    <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl overflow-hidden">
+                      <div className="p-3 border-b border-[#30363d]">
+                        <p className="font-bold text-white truncate">{patientName || "Guest"}</p>
+                        <p className="text-[10px] text-[#8b949e] uppercase font-semibold mt-0.5">Resident</p>
+                      </div>
+                      <div className="py-1">
+                        <button
+                          onClick={() => {
+                            setShowDropdown(false);
+                            setShowEditModal(true);
+                            setEditSuccess(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-white hover:bg-[#1a1d23] text-left cursor-pointer transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                          <span>Edit Personal Info</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowDropdown(false);
+                            localStorage.removeItem("respondaCare_session");
+                            navigate("/");
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-red-400 hover:text-red-300 hover:bg-[#1a1d23] text-left border-t border-[#30363d] cursor-pointer transition-colors"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span>Logout</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </header>

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
-import { Heart, Pill, AlertCircle, Activity, Plus, Save, Loader2, CheckCircle2 } from "lucide-react";
+import { Heart, Pill, AlertCircle, Activity, Plus, Save, Loader2, CheckCircle2, LogOut, Pencil } from "lucide-react";
 import { FormInput, FormTextarea, FormSelect } from "../../components/ui/FormInput";
 import { Button } from "../../components/ui/Button";
 import { encryptPayload } from "../../lib/cryptoUtils";
 import { supabase, isPlaceholderUrl } from "../../lib/supabase";
+import { useNavigate } from "react-router-dom";
 
 const sections = [
   { icon: <Heart className="w-5 h-5 text-[#e53e3e]" />, title: "Medical History", id: "medical" },
@@ -15,6 +16,25 @@ const sections = [
 
 export default function EnrollmentPage() {
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  // Profile Dropdown state & info
+  const [patientName, setPatientName] = useState("Guest");
+  const [patientId, setPatientId] = useState("RC-8829-X");
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  useEffect(() => {
+    const session = localStorage.getItem("respondaCare_session");
+    if (session) {
+      try {
+        const parsed = JSON.parse(session);
+        if (parsed.name) setPatientName(parsed.name);
+        if (parsed.auth_uid) {
+          setPatientId("RC-" + parsed.auth_uid.substring(0, 6).toUpperCase());
+        }
+      } catch (e) {}
+    }
+  }, []);
 
   // Form States
   const [bloodType, setBloodType] = useState("O+");
@@ -291,6 +311,61 @@ export default function EnrollmentPage() {
               });
             if (recErr) throw recErr;
 
+            // Sync to health.profiles
+            const allergiesCombined = [drugAllergy, foodAllergy, envAllergy].filter(Boolean).join(", ");
+            const medicationsCombined = medications.map(m => `${m.name} (${m.dose} - ${m.freq})`).join(", ");
+            const { error: profErr } = await supabase
+              .schema("health")
+              .from("profiles")
+              .upsert({
+                resident_id: residentId,
+                blood_type: bloodType,
+                allergies: allergiesCombined || "None",
+                medications: medicationsCombined || "None",
+                past_medical_hx: surgeries || "None",
+                updated_by: authUser.id
+              }, { onConflict: 'resident_id' });
+            if (profErr) console.warn("Failed to update health.profiles:", profErr);
+
+            // Sync to health.allergy_flags (clean existing first)
+            await supabase.schema("health").from("allergy_flags").delete().eq("resident_id", residentId);
+            const allergens = [
+              { name: drugAllergy, type: 'drug' },
+              { name: foodAllergy, type: 'food' },
+              { name: envAllergy, type: 'environmental' }
+            ].filter(a => a.name && a.name.trim());
+
+            for (const item of allergens) {
+              const { error: algErr } = await supabase
+                .schema("health")
+                .from("allergy_flags")
+                .insert({
+                  resident_id: residentId,
+                  allergen_name: item.name.trim(),
+                  severity: 'moderate',
+                  flagged_by: authUser.id
+                });
+              if (algErr) console.warn("Failed to insert allergy flag:", algErr);
+            }
+
+            // Sync to health.medications (clean existing first)
+            await supabase.schema("health").from("medications").delete().eq("resident_id", residentId);
+            for (const med of medications) {
+              if (med.name && med.name.trim()) {
+                const { error: medErr } = await supabase
+                  .schema("health")
+                  .from("medications")
+                  .insert({
+                    resident_id: residentId,
+                    drug_name: med.name.trim(),
+                    dosage: med.dose || "N/A",
+                    frequency: med.freq || "N/A",
+                    is_active: true
+                  });
+                if (medErr) console.warn("Failed to insert medication flag:", medErr);
+              }
+            }
+
             // Log administrative action in audit logs
             const { error: auditErr } = await supabase
               .schema("security")
@@ -318,9 +393,70 @@ export default function EnrollmentPage() {
 
   return (
     <div ref={ref} className="bg-[#0f1115] min-h-full p-8 text-white">
-      <header data-animate className="mb-8">
-        <h1 className="text-3xl font-bold text-white">Digital Health Enrollment</h1>
-        <p className="text-[#9ca3af] mt-2">Update your complete health profile for emergency use by first responders.</p>
+      <header data-animate className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 relative z-50">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Digital Health Enrollment</h1>
+          <p className="text-[#9ca3af] mt-2">Update your complete health profile for emergency use by first responders.</p>
+        </div>
+
+        {/* Profile Dropdown */}
+        <div className="flex items-center gap-3 relative">
+          <div 
+            className="relative"
+            onMouseEnter={() => setShowDropdown(true)}
+            onMouseLeave={() => setShowDropdown(false)}
+          >
+            <button
+              onClick={() => setShowDropdown(!showDropdown)}
+              className="flex items-center gap-3 bg-[#1a1d23] hover:bg-[#252930] px-4 py-2 rounded-full border border-gray-800 transition-colors cursor-pointer text-left focus:outline-none"
+            >
+              <div className="text-right">
+                <p className="text-sm font-bold text-white leading-tight">{patientName || "Guest"}</p>
+                <p className="text-[10px] text-[#9ca3af] uppercase font-semibold">ID: {patientId}</p>
+              </div>
+              <div className="relative">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#8b1a1a] to-[#4a0f0f] flex items-center justify-center text-white font-bold border-2 border-[#8b1a1a]">
+                  {(patientName || "G").charAt(0).toUpperCase()}
+                </div>
+                <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[#0f1115] rounded-full animate-pulse" />
+              </div>
+            </button>
+
+            {showDropdown && (
+              <div className="absolute right-0 top-full pt-2 w-48 z-50 text-white text-xs">
+                <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl overflow-hidden">
+                  <div className="p-3 border-b border-[#30363d]">
+                    <p className="font-bold text-white truncate">{patientName || "Guest"}</p>
+                    <p className="text-[10px] text-[#8b949e] uppercase font-semibold mt-0.5">Resident</p>
+                  </div>
+                  <div className="py-1">
+                    <button
+                      onClick={() => {
+                        setShowDropdown(false);
+                        navigate("/patient/dashboard?edit=true");
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-white hover:bg-[#1a1d23] text-left cursor-pointer transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                      <span>Edit Personal Info</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowDropdown(false);
+                        localStorage.removeItem("respondaCare_session");
+                        navigate("/");
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-red-400 hover:text-red-300 hover:bg-[#1a1d23] text-left border-t border-[#30363d] cursor-pointer transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Logout</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
       {/* Progress / Sections */}

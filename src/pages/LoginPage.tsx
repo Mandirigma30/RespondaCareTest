@@ -114,6 +114,67 @@ export default function LoginPage() {
   const [forgotStatus, setForgotStatus] = useState<"idle" | "sent" | "error">("idle");
   const [forgotError, setForgotError] = useState("");
 
+  // Reset success and error states on step change to avoid disabling buttons or displaying stale alerts
+  useEffect(() => {
+    setSuccess(false);
+    setError("");
+  }, [step]);
+
+  // Password recovery state (when user clicks reset link from email)
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [recoverySuccess, setRecoverySuccess] = useState(false);
+
+  // Listen for Supabase PASSWORD_RECOVERY event
+  useEffect(() => {
+    const hasRecovery = window.location.hash.includes("type=recovery") || 
+                        window.location.search.includes("type=recovery") ||
+                        window.location.hash.includes("access_token");
+    if (hasRecovery) {
+      setIsRecovering(true);
+    }
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setIsRecovering(true);
+      }
+    });
+    return () => { authListener.subscription.unsubscribe(); };
+  }, []);
+
+  const handlePasswordRecovery = async (e: FormEvent) => {
+    e.preventDefault();
+    setRecoveryError("");
+    if (!newPassword || newPassword.length < 6) {
+      setRecoveryError("Password must be at least 6 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setRecoveryError("Passwords do not match.");
+      return;
+    }
+    setRecoveryLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setRecoverySuccess(true);
+      setTimeout(() => {
+        setIsRecovering(false);
+        setRecoverySuccess(false);
+        setNewPassword("");
+        setConfirmPassword("");
+        navigate("/login", { replace: true }); // Clear hash tokens from URL
+      }, 2500);
+    } catch (err: any) {
+      setRecoveryError(err.message || "Failed to update password.");
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
   const handleForgotPassword = async (e: FormEvent) => {
     e.preventDefault();
     if (!forgotEmail.trim()) {
@@ -380,13 +441,21 @@ export default function LoginPage() {
       const isRealUser = !isPlaceholderUrl;
 
       let isVerified = false;
-      if (sandboxUser && sandboxUser.secret) {
+
+      // Real Supabase users bypass client-side TOTP (server handles MFA)
+      if (isRealUser) {
+        isVerified = true;
+      }
+      // Sandbox: "123456" is always a valid bypass code
+      else if (token === "123456") {
+        isVerified = true;
+      }
+      // Sandbox: try TOTP if a secret is configured
+      else if (sandboxUser && sandboxUser.secret) {
         isVerified = await verifyTOTP(sandboxUser.secret, token);
-      } else {
-        isVerified = token === "123456" || isRealUser;
       }
 
-      if (isVerified || isRealUser) {
+      if (isVerified) {
         if (finalRole === "responder") {
           setStep(3);
         } else {
@@ -406,7 +475,7 @@ export default function LoginPage() {
           navigate("/admin/dashboard");
         }
       } else {
-        setError("Invalid security token. Please enter the correct Authenticator code.");
+        setError("Invalid security token. Use your Authenticator app code, or enter 123456 for sandbox testing.");
       }
     } catch (err: any) {
       setError(err.message || "MFA validation failed.");
@@ -487,11 +556,48 @@ export default function LoginPage() {
       {/* Main */}
       <main className="flex-grow flex flex-col items-center justify-center px-4 py-12">
         <h1 data-animate className="text-3xl font-bold mb-10 tracking-tight">
-          {step === 1 ? "Welcome Back" : "Security Verification"}
+          {isRecovering ? "Set New Password" : step === 1 ? "Welcome Back" : "Security Verification"}
         </h1>
 
-        {/* Login Card */}
-        <section
+        {/* Password Recovery Screen */}
+        {isRecovering ? (
+          <section
+            data-animate
+            className="w-full max-w-[540px] rounded-2xl p-8 md:p-10 shadow-2xl"
+            style={{ border: "1px solid #30363d", background: "linear-gradient(180deg, #161b22 0%, #0d1117 100%)" }}
+          >
+            {recoverySuccess ? (
+              <div className="text-center space-y-4">
+                <CheckCircle2 className="h-12 w-12 text-emerald-400 mx-auto animate-pulse" />
+                <h2 className="text-lg font-bold text-white">Password Updated!</h2>
+                <p className="text-sm text-[#8b949e]">Your password has been changed. You can now log in with your new credentials.</p>
+              </div>
+            ) : (
+              <form onSubmit={handlePasswordRecovery} className="space-y-5">
+                <p className="text-sm text-[#8b949e]">Enter and confirm your new password below.</p>
+                {recoveryError && (
+                  <div className="p-3 rounded-lg bg-red-950/45 border border-[#a01e1e] text-sm text-red-300 font-mono">
+                    ⚠️ {recoveryError}
+                  </div>
+                )}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8b949e] uppercase tracking-widest mb-2">New Password</label>
+                    <input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min. 6 characters" className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] focus:ring-1 focus:ring-[#8b1a1a] rounded-lg px-4 py-3 text-white text-sm outline-none transition-all" required />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8b949e] uppercase tracking-widest mb-2">Confirm Password</label>
+                    <input id="confirm-password" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Re-enter your new password" className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#8b1a1a] focus:ring-1 focus:ring-[#8b1a1a] rounded-lg px-4 py-3 text-white text-sm outline-none transition-all" required />
+                  </div>
+                </div>
+                <button type="submit" disabled={recoveryLoading} className="w-full flex items-center justify-center gap-2 bg-[#8b1a1a] hover:bg-[#a01e1e] text-white font-bold py-4 px-4 rounded-lg transition-colors shadow-lg shadow-red-900/20 cursor-pointer disabled:opacity-50">
+                  {recoveryLoading ? (<><Loader2 className="h-5 w-5 animate-spin" /><span>Updating...</span></>) : <span>Update Password</span>}
+                </button>
+              </form>
+            )}
+          </section>
+        ) : (
+          <section
           data-animate
           className="w-full max-w-[540px] rounded-2xl p-8 md:p-10 shadow-2xl"
           style={{
@@ -709,6 +815,7 @@ export default function LoginPage() {
             </form>
           )}
         </section>
+        )}
 
         {step === 1 && role !== "admin" && (
           <p data-animate className="mt-8 text-sm text-[#8b949e]">
