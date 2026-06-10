@@ -132,7 +132,7 @@ export default function AdminMapPage() {
       <TopBar title="Tactical Map View" />
       <div className="flex-1 flex gap-0 overflow-hidden">
         {/* Map */}
-        <div data-animate className="flex-1 relative" style={{ minHeight: "calc(100vh - 75px)" }}>
+        <div className="flex-1 relative" style={{ minHeight: "calc(100vh - 75px)" }}>
           <MapView incidents={incidents} center={mapCenter} zoom={mapZoom} />
 
           {/* Map controls overlay */}

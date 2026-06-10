@@ -73,7 +73,11 @@ export default function DispatchPage() {
             const mapped: DispatchItem[] = data.map((inc: any) => ({
               id: inc.incident_id,
               type: inc.nature_of_call || "Emergency Alert",
-              address: inc.address || "Zone 3, Barangay 45",
+              // [C1] Fix: use real GPS coordinates in address when no address field is stored
+              address: inc.address ||
+                (inc.latitude && inc.longitude
+                  ? `GPS: ${Number(inc.latitude).toFixed(5)}, ${Number(inc.longitude).toFixed(5)}`
+                  : "Zone 3, Barangay 45"),
               eta: inc.severity_score >= 4 ? "3 min" : "10 min",
               priority: inc.severity_score >= 5 ? "critical" : inc.severity_score >= 4 ? "high" : inc.severity_score >= 3 ? "medium" : "low",
               icon: inc.nature_of_call?.toLowerCase().includes("cardiac") ? "❤️" : inc.nature_of_call?.toLowerCase().includes("accident") ? "🚗" : "⚠️",
@@ -97,7 +101,11 @@ export default function DispatchPage() {
             .map((inc: any) => ({
               id: inc.id || "#INC-9999",
               type: inc.category || "Emergency SOS",
-              address: inc.address || inc.barangay || "Zone 3, Pasay City",
+              // [C1] Fix: prefer address field, fallback to GPS coordinates from lat/lng
+              address: inc.address || inc.barangay ||
+                (inc.lat && inc.lng
+                  ? `GPS: ${Number(inc.lat).toFixed(5)}, ${Number(inc.lng).toFixed(5)}`
+                  : "Zone 3, Pasay City"),
               eta: "5 min",
               priority: "critical",
               icon: "🚨",

@@ -307,7 +307,6 @@ export default function EnrollmentPage() {
                 resident_id: residentId,
                 encrypted_vitals: encrypted,
                 record_type: "updated",
-                recorded_by: authUser.id
               });
             if (recErr) throw recErr;
 
@@ -323,7 +322,6 @@ export default function EnrollmentPage() {
                 allergies: allergiesCombined || "None",
                 medications: medicationsCombined || "None",
                 past_medical_hx: surgeries || "None",
-                updated_by: authUser.id
               }, { onConflict: 'resident_id' });
             if (profErr) console.warn("Failed to update health.profiles:", profErr);
 
@@ -343,7 +341,6 @@ export default function EnrollmentPage() {
                   resident_id: residentId,
                   allergen_name: item.name.trim(),
                   severity: 'moderate',
-                  flagged_by: authUser.id
                 });
               if (algErr) console.warn("Failed to insert allergy flag:", algErr);
             }
@@ -362,7 +359,7 @@ export default function EnrollmentPage() {
                     frequency: med.freq || "N/A",
                     is_active: true
                   });
-                if (medErr) console.warn("Failed to insert medication flag:", medErr);
+                if (medErr) console.warn("Failed to insert medication:", medErr);
               }
             }
 
@@ -376,7 +373,7 @@ export default function EnrollmentPage() {
                 target_id: residentId,
                 details: { info: "Resident updated own encrypted medical profile" }
               });
-            if (auditErr) throw auditErr;
+            if (auditErr) console.warn("Failed to write audit log:", auditErr);
           }
         }
       }
