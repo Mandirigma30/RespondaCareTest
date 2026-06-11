@@ -35,6 +35,7 @@ const EmergencyPage = lazy(() => import('./pages/patient/EmergencyPage'))
 const EducationPage = lazy(() => import('./pages/patient/EducationPage'))
 const EnrollmentPage = lazy(() => import('./pages/patient/EnrollmentPage'))
 const PatientNotificationsPage = lazy(() => import('./pages/patient/NotificationsPage'))
+const PatientHealthRecordsPage = lazy(() => import('./pages/patient/PatientHealthRecordsPage'))
 
 const PageLoader = () => (
   <div className="min-h-screen bg-[#0c0f16] text-white flex flex-col items-center justify-center font-mono">
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="education" element={<EducationPage />} />
           <Route path="enrollment" element={<EnrollmentPage />} />
           <Route path="notifications" element={<PatientNotificationsPage />} />
+          <Route path="health-records" element={<PatientHealthRecordsPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

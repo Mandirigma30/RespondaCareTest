@@ -1,12 +1,13 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LayoutGrid, User, BookOpen, AlertTriangle, LogOut, PlusSquare } from "lucide-react";
+import { LayoutGrid, User, BookOpen, AlertTriangle, LogOut, PlusSquare, FileHeart } from "lucide-react";
 import { useSidebarAnimation } from "../animations/usePageAnimation";
 
 const navItems = [
-  { href: "/patient/dashboard",  label: "Dashboard",       icon: LayoutGrid },
-  { href: "/patient/enrollment", label: "My Profile",      icon: User },
-  { href: "/patient/education",  label: "Health Education", icon: BookOpen },
-  { href: "/patient/emergency",  label: "Active Actions",  icon: AlertTriangle }
+  { href: "/patient/dashboard",      label: "Dashboard",        icon: LayoutGrid },
+  { href: "/patient/enrollment",     label: "My Profile",       icon: User },
+  { href: "/patient/health-records", label: "Health Records",   icon: FileHeart },
+  { href: "/patient/education",      label: "Health Education", icon: BookOpen },
+  { href: "/patient/emergency",      label: "Active Actions",   icon: AlertTriangle }
 ];
 
 export function PatientSidebar() {

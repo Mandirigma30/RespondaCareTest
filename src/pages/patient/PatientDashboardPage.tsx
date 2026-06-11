@@ -6,12 +6,7 @@ import { Button } from "../../components/ui/Button";
 import { QRCodeCanvas } from "qrcode.react";
 import jsPDF from "jspdf";
 import { supabase, isPlaceholderUrl } from "../../lib/supabase";
-
-interface EmergencyContact {
-  name: string;
-  rel: string;
-  phone: string;
-}
+import { useEmergencyContacts } from "../../hooks/useEmergencyContacts";
 
 export default function PatientDashboardPage() {
   const ref = useRef<HTMLDivElement>(null);
@@ -43,7 +38,11 @@ export default function PatientDashboardPage() {
   }, [searchParams, setSearchParams]);
 
   // Dynamic Emergency Contacts
-  const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
+  const {
+    contacts: emergencyContacts,
+    addContact,
+    deleteContact
+  } = useEmergencyContacts();
   const [showAddContact, setShowAddContact] = useState(false);
   const [newContactName, setNewContactName] = useState("");
   const [newContactRel, setNewContactRel] = useState("");
@@ -108,21 +107,6 @@ export default function PatientDashboardPage() {
           setEditDob(p.dob || "");
           setEditGender(p.gender || "Male");
         } catch (e) {}
-      }
-
-      // Load emergency contacts from localStorage
-      const contactsKey = `respondaCare_ec_${trimmedEmail || "guest"}`;
-      const storedContacts = localStorage.getItem(contactsKey);
-      if (storedContacts) {
-        try {
-          setEmergencyContacts(JSON.parse(storedContacts));
-        } catch (e) {}
-      } else {
-        // Default placeholder contacts
-        setEmergencyContacts([
-          { name: "Sarah Johnson", rel: "Spouse", phone: "(555) 012-3456" },
-          { name: "Dr. Michael Chen", rel: "Primary MD", phone: "(555) 987-6543" },
-        ]);
       }
 
       // 3. Find encrypted medical card: try Database query first, then fallback to local storage
@@ -361,30 +345,27 @@ export default function PatientDashboardPage() {
   };
 
   // ── Emergency Contact helpers ────────────────────────────────────────────
-  const persistContacts = (contacts: EmergencyContact[]) => {
-    const session = localStorage.getItem("respondaCare_session");
-    let sessionEmail = "guest";
-    if (session) { try { sessionEmail = JSON.parse(session).email || "guest"; } catch (e) {} }
-    localStorage.setItem(`respondaCare_ec_${sessionEmail}`, JSON.stringify(contacts));
-  };
-
-  const handleAddContact = () => {
+  const handleAddContact = async () => {
     if (!newContactName.trim()) return;
-    const updated = [...emergencyContacts, {
-      name: newContactName.trim(),
-      rel: newContactRel.trim() || "Contact",
-      phone: newContactPhone.trim() || "N/A",
-    }];
-    setEmergencyContacts(updated);
-    persistContacts(updated);
-    setNewContactName(""); setNewContactRel(""); setNewContactPhone("");
-    setShowAddContact(false);
+    try {
+      await addContact({
+        name: newContactName.trim(),
+        relationship: newContactRel.trim() || "Contact",
+        phone: newContactPhone.trim() || "N/A",
+      });
+      setNewContactName(""); setNewContactRel(""); setNewContactPhone("");
+      setShowAddContact(false);
+    } catch (err) {
+      console.error("Failed to add emergency contact:", err);
+    }
   };
 
-  const handleRemoveContact = (idx: number) => {
-    const updated = emergencyContacts.filter((_, i) => i !== idx);
-    setEmergencyContacts(updated);
-    persistContacts(updated);
+  const handleRemoveContact = async (id: string) => {
+    try {
+      await deleteContact(id);
+    } catch (err) {
+      console.error("Failed to remove emergency contact:", err);
+    }
   };
 
   const handleDownloadPdf = () => {
@@ -658,17 +639,17 @@ export default function PatientDashboardPage() {
               {emergencyContacts.length === 0 && (
                 <p className="text-xs text-[#8b949e] text-center py-3">No emergency contacts added yet.</p>
               )}
-              {emergencyContacts.map((c, idx) => (
-                <div key={idx} className="flex items-center gap-4 group">
+              {emergencyContacts.map((c) => (
+                <div key={c.id} className="flex items-center gap-4 group">
                   <div className="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-white">
                     {c.name[0]}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-white text-sm truncate">{c.name}</h4>
-                    <p className="text-[11px] text-[#9ca3af]">{c.rel} • {c.phone}</p>
+                    <p className="text-[11px] text-[#9ca3af]">{c.relationship} • {c.phone}</p>
                   </div>
                   <button
-                    onClick={() => handleRemoveContact(idx)}
+                    onClick={() => handleRemoveContact(c.id)}
                     className="opacity-0 group-hover:opacity-100 p-1 text-red-600 hover:text-red-400 transition-all cursor-pointer flex-shrink-0"
                     title="Remove contact"
                   >
